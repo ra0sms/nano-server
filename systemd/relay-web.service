@@ -1,0 +1,13 @@
+[Unit]
+Description=Relay Web Control Panel
+After=network.target multi-user.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/nano-server
+ExecStart=/usr/bin/python3 /home/pi/nano-server/web/app.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

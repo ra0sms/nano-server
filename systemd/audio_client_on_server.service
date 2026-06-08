@@ -1,0 +1,16 @@
+[Unit]
+Description=GStreamer Audio RX (client to server)
+After=network.target multi-user.target
+
+[Service]
+User=root
+Group=root
+Type=simple
+
+WorkingDirectory=/home/pi/nano-server
+ExecStart=/home/pi/nano-server/audio/audio_client_on_server.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

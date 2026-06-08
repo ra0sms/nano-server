@@ -1,0 +1,26 @@
+[Unit]
+Description=MJPG Streamer USB Camera Server
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi
+
+ExecStart=/usr/local/bin/mjpg_streamer \
+-i "input_uvc.so -d /dev/video1 -r 640x480 -f 10 -q 70" \
+-o "output_http.so -p 8081 -n"
+
+Restart=on-failure
+RestartSec=3
+
+StandardOutput=journal
+StandardError=journal
+
+SyslogIdentifier=mjpg-streamer
+
+PrivateTmp=false
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target
