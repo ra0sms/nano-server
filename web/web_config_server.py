@@ -196,6 +196,8 @@ def get_volume_template(speaker_volume, mic_capture, active_page="volume"):
                 <div class="value-display">{speaker_volume}%</div>
                 <button type="submit" name="action" value="set_speaker">Set Speaker</button>
             </div>
+        </form>
+        <form method="post">
             <div class="control-group">
                 <h2>Audio IN</h2>
                 <input type="range" name="mic_capture" min="0" max="100" value="{mic_capture}">
@@ -430,8 +432,12 @@ def get_mic_value():
             ["amixer", "-c0", "cget", MIC], capture_output=True, text=True, timeout=5
         )
         for line in result.stdout.splitlines():
-            if "values=" in line:
-                val = line.split("values=")[1].split(",")[0].strip()
+            # amixer cget output has two lines with 'values=':
+            #   ; type=INTEGER,...,values=2,...  ← channel count (wrong)
+            #   : values=17,17                  ← actual volume (correct)
+            # Only the line starting with ': ' contains real values.
+            if line.strip().startswith(": values="):
+                val = line.strip().split("values=")[1].split(",")[0].strip()
                 return int(val) if val.isdigit() else 8
     except Exception:
         pass
@@ -580,7 +586,9 @@ def index():
                 ["/usr/sbin/alsactl", "-f", "/var/lib/alsa/asound.state", "store"],
                 timeout=5,
             )
+            # Re-read both values after change — hardware may link speaker and capture
             speaker_vol = get_speaker_volume()
+            mic_capture_display = alsa_to_percent(get_mic_value())
         elif action == "set_mic":
             mic_capture_display = request.form.get("mic_capture", mic_capture_display)
             alsa_value = percent_to_alsa(mic_capture_display)
@@ -589,7 +597,7 @@ def index():
                 ["/usr/sbin/alsactl", "-f", "/var/lib/alsa/asound.state", "store"],
                 timeout=5,
             )
-            mic_capture_display = alsa_to_percent(alsa_value)
+            mic_capture_display = alsa_to_percent(get_mic_value())
 
     return get_volume_template(speaker_vol, mic_capture_display, "volume")
 
