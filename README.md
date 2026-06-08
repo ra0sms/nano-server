@@ -67,7 +67,7 @@ Client PC                          NanoPi NEO (Server)
 ### 2. Clone the repository
 
 ```bash
-git clone https://github.com/youruser/nano-server.git /home/pi/nano-server
+git clone https://github.com/ra0sms/nano-server.git /home/pi/nano-server
 cd /home/pi/nano-server
 ```
 
