@@ -29,10 +29,11 @@ except Exception as _e:
     print(f"Warning: could not open I2C bus 0: {_e}")
     bus = None
 
+# PCF8574 at 0x20 (A2=A1=A0=0) and 0x21 (A0=1)
 ADDR1 = 0x20
 ADDR2 = 0x21
 
-state1 = 0xFF
+state1 = 0xFF  # all relays OFF (active-low: HIGH = OFF)
 state2 = 0xFF
 
 
@@ -82,6 +83,7 @@ def save_config():
 
 
 def apply():
+    """Write current relay state to both PCF8574T chips."""
     if bus is None:
         return
     bus.write_byte(ADDR1, state1)
@@ -780,5 +782,5 @@ def settings():
 
 if __name__ == "__main__":
     load_config()
-    apply()
+    apply()  # write initial state (all relays OFF)
     app.run(host="0.0.0.0", port=5050)
