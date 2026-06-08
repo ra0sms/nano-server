@@ -153,6 +153,31 @@ def client_monitor():
         time.sleep(CHECK_INTERVAL)
 
 
+def ping_responder():
+    """Reply PING_RESPONSE to any PING_REQUEST — lets the client measure RTT."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("0.0.0.0", PING_PORT))
+    print(f"🏓 Ping responder listening on port {PING_PORT}...")
+    while not shutdown_flag.is_set():
+        try:
+            sock.settimeout(0.5)
+            data, addr = sock.recvfrom(1024)
+            if data == b"PING_REQUEST":
+                sock.sendto(b"PING_RESPONSE", addr)
+        except socket.timeout:
+            continue
+        except Exception as e:
+            if not shutdown_flag.is_set():
+                print(f"⚠️ Ping responder error: {e}")
+    sock.close()
+
+
+def reload_config(sig, frame):
+    """Reload client_ip.cfg on SIGHUP — no restart needed after IP change."""
+    print("🔄 SIGHUP received — reloading client IP...")
+    read_allowed_ip(CLIENT_IP_FILE)
+
+
 def signal_handler(sig, frame):
     print("\n🛑 Shutdown requested...")
     shutdown_flag.set()
@@ -172,19 +197,28 @@ def signal_handler(sig, frame):
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGHUP, reload_config)
 
     read_allowed_ip(CLIENT_IP_FILE)
 
     # Start threads
     server_thread = threading.Thread(target=ptt_server, daemon=True)
     monitor_thread = threading.Thread(target=client_monitor, daemon=True)
+    responder_thread = threading.Thread(target=ping_responder, daemon=True)
 
     server_thread.start()
     monitor_thread.start()
+    responder_thread.start()
 
     print("✅ Combined PTT service started.")
-    print("   • UDP PTT control on port 5001")
-    print("   • Client ping monitoring on port 5002")
+    print(f"   • PTT receiver        : UDP port {SERVER_PORT}")
+    print(
+        f"   • Ping responder      : UDP port {PING_PORT}  (answers client's ONLINE check)"
+    )
+    print(
+        f"   • Client monitor      : pings {client_ip}:{PING_PORT} every {CHECK_INTERVAL}s"
+    )
+    print("   • Send SIGHUP to reload client_ip.cfg without restart")
     print("   • Press Ctrl+C to exit")
 
     try:
