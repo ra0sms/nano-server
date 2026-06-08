@@ -43,7 +43,7 @@ echo "  Target IP: $IP_ADDRESS"
 echo "  Sample Rate: $RATE Hz"
 echo "  Buffer Time: $BUFFER_TIME us"
 
-gst-launch-1.0 alsasrc device=hw:1 buffer-time=$BUFFER_TIME latency-time=1000 ! \
+gst-launch-1.0 alsasrc device=hw:0 buffer-time=$BUFFER_TIME latency-time=1000 ! \
 audioconvert ! audioresample ! \
 capsfilter caps="audio/x-raw,rate=$RATE,channels=1,format=S16LE" ! \
 equalizer-3bands band0=-24 band1=0 band2=0 ! \

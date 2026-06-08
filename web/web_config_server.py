@@ -427,7 +427,7 @@ def alsa_to_percent(alsa_value):
 def get_mic_value():
     try:
         result = subprocess.run(
-            ["amixer", "-c1", "cget", MIC], capture_output=True, text=True, timeout=5
+            ["amixer", "-c0", "cget", MIC], capture_output=True, text=True, timeout=5
         )
         for line in result.stdout.splitlines():
             if "values=" in line:
@@ -441,7 +441,7 @@ def get_mic_value():
 def get_speaker_volume():
     try:
         result = subprocess.run(
-            ["amixer", "-c1", "get", SPEAKER], capture_output=True, text=True, timeout=5
+            ["amixer", "-c0", "get", SPEAKER], capture_output=True, text=True, timeout=5
         )
         m = re.search(r"(\d+)%", result.stdout)
         return m.group(1) if m else "50"
@@ -574,7 +574,7 @@ def index():
         if action == "set_speaker":
             speaker_vol = request.form.get("speaker_volume", speaker_vol)
             subprocess.run(
-                ["amixer", "-c1", "set", SPEAKER, f"{speaker_vol}%"], timeout=5
+                ["amixer", "-c0", "set", SPEAKER, f"{speaker_vol}%"], timeout=5
             )
             subprocess.run(
                 ["/usr/sbin/alsactl", "-f", "/var/lib/alsa/asound.state", "store"],
@@ -584,7 +584,7 @@ def index():
         elif action == "set_mic":
             mic_capture_display = request.form.get("mic_capture", mic_capture_display)
             alsa_value = percent_to_alsa(mic_capture_display)
-            subprocess.run(["amixer", "-c1", "cset", MIC, str(alsa_value)], timeout=5)
+            subprocess.run(["amixer", "-c0", "cset", MIC, str(alsa_value)], timeout=5)
             subprocess.run(
                 ["/usr/sbin/alsactl", "-f", "/var/lib/alsa/asound.state", "store"],
                 timeout=5,
