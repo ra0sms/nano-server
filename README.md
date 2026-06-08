@@ -1,6 +1,6 @@
-# CAESAR — Remote Radio Station Server
+# Nano Server — Remote Radio Station Server
 
-**CAESAR** (Client Audio Equipment Server And Remote) is a server-side component of a remote ham radio station system. It runs on a **NanoPi NEO** single-board computer with **Armbian** and provides audio streaming, PTT control via GPIO, video streaming, relay switching, and a web-based configuration interface.
+**Nano Server** is a server-side component of a remote ham radio station system. It runs on a **NanoPi NEO** single-board computer with **Armbian** and provides audio streaming, PTT control via GPIO, video streaming, relay switching, and a web-based configuration interface.
 
 ---
 
