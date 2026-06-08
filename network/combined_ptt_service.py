@@ -7,13 +7,14 @@ import threading
 import time
 
 import gpiod
+from gpiod.line import Direction, Value
 
 # Absolute path to client_ip.cfg regardless of working directory
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CLIENT_IP_FILE = os.path.join(SCRIPT_DIR, "..", "client_ip.cfg")
 
 # === GPIO ===
-CHIP = "gpiochip0"
+CHIP_PATH = "/dev/gpiochip0"
 LINE_CON = 66
 LINE_PTT = 67
 CONSUMER = "ptt_combined"
@@ -32,13 +33,22 @@ client_ip = "0.0.0.0"
 need_ser2net_reboot = False
 shutdown_flag = threading.Event()
 
-# === GPIO Setup ===
+# === GPIO Setup (gpiod v2 API) ===
 try:
-    chip = gpiod.Chip(CHIP)
-    line_con = chip.get_line(LINE_CON)
-    line_ptt = chip.get_line(LINE_PTT)
-    line_con.request(consumer=CONSUMER, type=gpiod.LINE_REQ_DIR_OUT)
-    line_ptt.request(consumer=CONSUMER, type=gpiod.LINE_REQ_DIR_OUT)
+    gpio_request = gpiod.request_lines(
+        CHIP_PATH,
+        consumer=CONSUMER,
+        config={
+            LINE_CON: gpiod.LineSettings(
+                direction=Direction.OUTPUT,
+                output_value=Value.INACTIVE,
+            ),
+            LINE_PTT: gpiod.LineSettings(
+                direction=Direction.OUTPUT,
+                output_value=Value.INACTIVE,
+            ),
+        },
+    )
     print("GPIO lines initialized.")
 except Exception as e:
     print(f"❌ GPIO initialization failed: {e}")
@@ -69,7 +79,7 @@ def set_ptt(value: int):
         return
     if value != ptt_state:
         try:
-            line_ptt.set_value(value)
+            gpio_request.set_value(LINE_PTT, Value.ACTIVE if value else Value.INACTIVE)
             ptt_state = value
             print(f"📡 PTT {'ON' if value else 'OFF'} (GPIO={value})")
         except Exception as e:
@@ -134,14 +144,14 @@ def client_monitor():
         online = send_ping(client_ip) if client_ip != "0.0.0.0" else True
 
         if online:
-            line_con.set_value(1)
+            gpio_request.set_value(LINE_CON, Value.ACTIVE)
             if need_ser2net_reboot:
                 print("🔄 Client back online — restarting ser2net...")
                 os.system("systemctl restart ser2net.service")
                 need_ser2net_reboot = False
                 # NOTE: no need to restart self — we’re already running!
         else:
-            line_con.set_value(0)
+            gpio_request.set_value(LINE_CON, Value.INACTIVE)
             set_ptt(0)  # 🔒 FAIL-SAFE: disable PTT when client is gone
             need_ser2net_reboot = True
 
@@ -184,11 +194,9 @@ def signal_handler(sig, frame):
     time.sleep(0.2)  # let threads notice flag
     # Ensure PTT is OFF on exit
     set_ptt(0)
-    line_con.set_value(0)
+    gpio_request.set_value(LINE_CON, Value.INACTIVE)
     # Release GPIO resources so the service can restart cleanly
-    line_ptt.release()
-    line_con.release()
-    chip.close()
+    gpio_request.release()
     print("👋 Goodbye.")
     sys.exit(0)
 
