@@ -68,8 +68,8 @@ echo -e "${GREEN}Setting hostname...${NC}"
 hostnamectl set-hostname nano-server-2 || { echo -e "${RED}Failed to set hostname${NC}"; exit 1; }
 
 echo -e "${GREEN}Configuring hardware...${NC}"
-# NOTE: armbianEnv.txt must be configured manually.
-# See armbianEnv.txt in this repo as a reference for required overlays.
+chmod +x ./setup_armbian_env.sh
+bash ./setup_armbian_env.sh
 
 /usr/sbin/alsactl -f /var/lib/alsa/asound.state store || true
 
