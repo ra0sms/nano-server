@@ -28,7 +28,7 @@ apt-get install -y \
   cmake build-essential libjpeg-dev libv4l-dev \
   gstreamer1.0-tools gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
   gstreamer1.0-plugins-ugly gstreamer1.0-libav \
-  python3-libgpiod python3-smbus2 python3-requests ser2net ||
+  python3-libgpiod python3-smbus2 python3-requests ||
   { echo -e "${RED}Failed to install packages${NC}"; exit 1; }
 
 echo -e "${GREEN}Building mjpg-streamer...${NC}"

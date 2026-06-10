@@ -627,7 +627,7 @@ HTML_TEMPLATE = """
                 Mode:
                 <select id="group1_mode">
                     <option value="toggle">Toggle</option>
-                    <option value="switch">Switch (radio)</option>
+                    <option value="switch">Switch</option>
                 </select>
                 <div id="relay-names1" style="margin-top: 15px;"></div>
             </div>
@@ -637,7 +637,7 @@ HTML_TEMPLATE = """
                 Mode:
                 <select id="group2_mode">
                     <option value="toggle">Toggle</option>
-                    <option value="switch">Switch (radio)</option>
+                    <option value="switch">Switch</option>
                 </select>
                 <div id="relay-names2" style="margin-top: 15px;"></div>
             </div>
