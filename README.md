@@ -2,6 +2,8 @@
 
 **Nano Server** is a server-side component of a remote ham radio station system. It runs on a **NanoPi NEO** single-board computer with **Armbian** and provides audio streaming, PTT control via GPIO, video streaming, relay switching, and a web-based configuration interface.
 
+Desktop client software: https://github.com/ra0sms/caesar-client-desktop
+
 ![PCB](pics/pcb-1.jpg)
 
 ---
