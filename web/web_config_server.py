@@ -178,12 +178,12 @@ def get_volume_template(speaker_volume, mic_capture, active_page="volume"):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CAESAR Volume Control</title>
+    <title>Volume Control</title>
     {COMMON_STYLE}
 </head>
 <body>
     <div class="container">
-        <h1>CAESAR Control Panel (Server)</h1>
+        <h1>Control Panel (Server)</h1>
         <div class="nav">
             <a href="/"><button class="nav-button {active_volume}">Volume Control</button></a>
             <a href="/config"><button class="nav-button {active_config}">Configuration</button></a>
@@ -282,12 +282,12 @@ def get_config_template(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CAESAR Configuration</title>
+    <title>Configuration</title>
     {COMMON_STYLE}
 </head>
 <body>
     <div class="container">
-        <h1>CAESAR Control Panel (Server)</h1>
+        <h1>Control Panel (Server)</h1>
         <div class="nav">
             <a href="/"><button class="nav-button {active_volume}">Volume Control</button></a>
             <a href="/config"><button class="nav-button {active_config}">Configuration</button></a>
@@ -366,7 +366,7 @@ def get_status_template(active_page="status"):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CAESAR Status</title>
+    <title>Status</title>
     {COMMON_STYLE}
     <script>
         function updateStatus() {{
@@ -397,7 +397,7 @@ def get_status_template(active_page="status"):
 </head>
 <body>
     <div class="container">
-        <h1>CAESAR Control Panel (Server)</h1>
+        <h1>Control Panel (Server)</h1>
         <div class="nav">
             <a href="/"><button class="nav-button {active_volume}">Volume</button></a>
             <a href="/config"><button class="nav-button {active_config}">Configuration</button></a>

@@ -2,6 +2,8 @@
 
 **Nano Server** is a server-side component of a remote ham radio station system. It runs on a **NanoPi NEO** single-board computer with **Armbian** and provides audio streaming, PTT control via GPIO, video streaming, relay switching, and a web-based configuration interface.
 
+![PCB](pics/pcb-1.jpg)
+
 ---
 
 ## Features
@@ -9,9 +11,9 @@
 - 🎙️ **Bidirectional audio** over UDP (GStreamer + Opus codec)
 - 📡 **PTT control** via GPIO with client reachability monitoring
 - 📷 **Video streaming** via mjpg-streamer (MJPEG over HTTP)
-- 🔌 **Relay control** via I2C (2× MCP23017, 16 relays total)
+- 🔌 **Relay control** via I2C (2×PCF8574T, 16 relays total)
 - 🌐 **Web configuration** — IP addresses, audio settings, volume, profiles
-- 🔗 **CAT interface** forwarding over UDP via ser2net
+- 🔗 **CAT interface** forwarding over TCP
 - 🔒 **Fail-safe** — PTT is forced OFF when client disconnects
 
 ---
@@ -25,7 +27,7 @@
 | Audio | USB sound card (card index 0) |
 | Camera | USB webcam on `/dev/video1` |
 | Relay board | 2× I2C GPIO expander at `0x20` / `0x21` |
-| CAT interface | USB-to-Serial on `/dev/ttyCAT` (via udev symlink) |
+| CAT interface | USB-to-Serial on `/dev/ttyUSB0` |
 | CON LED | GPIO PC2 (line 66) |
 | PTT output | GPIO PC3 (line 67) |
 
@@ -43,7 +45,7 @@ Client PC                          NanoPi NEO (Server)
                     TCP :8080  ←──  Web config UI (Flask)
                     TCP :5050  ←──  Relay control UI (Flask)
                     TCP :8081  ←──  MJPEG video stream
-                    UDP :3001  ←──  CAT / ser2net
+                    TCP :3001  ←──  CAT
 ```
 
 ### Systemd services
@@ -54,7 +56,7 @@ Client PC                          NanoPi NEO (Server)
 | `audio_server` | GStreamer audio TX (server mic → client) |
 | `audio_client_on_server` | GStreamer audio RX (client → server speaker) |
 | `web_config_server` | Web UI: volume, IP config, audio settings, profiles |
-| `relay-web` | Web UI: relay switching via I2C |
+| `relay-web` | Web UI: relay switching via I2C and TRX control|
 | `mjpeg-streamer` | MJPEG video stream from USB camera |
 | `alsa_restore` | Restores ALSA mixer state at boot |
 
@@ -67,7 +69,7 @@ Client PC                          NanoPi NEO (Server)
 ### 2. Clone the repository
 
 ```bash
-git clone https://github.com/ra0sms/nano-server.git /home/pi/nano-server
+git clone https://github.com/ra0sms/nano-server.git
 cd /home/pi/nano-server
 ```
 
@@ -78,7 +80,7 @@ sudo bash install_server.sh
 ```
 
 The script will:
-- Install all required packages (GStreamer, Flask, gpiod, ser2net, mjpg-streamer, etc.)
+- Install all required packages (GStreamer, Flask, gpiod, mjpg-streamer, etc.)
 - Build and install **mjpg-streamer** from source
 - Create `client_ip.cfg`, `server_ip.cfg`, and `web/password.txt` with defaults
 - Configure hardware overlays in `/boot/armbianEnv.txt`
@@ -104,12 +106,6 @@ echo 'yourpassword' > /home/pi/nano-server/web/password.txt
 
 ```bash
 sudo bash /home/pi/nano-server/fix_usb_ports.sh
-```
-
-### 7. Configure ser2net
-
-```bash
-sudo bash /home/pi/nano-server/create_ser2net_yaml.sh
 ```
 
 ### 8. Reboot
@@ -150,6 +146,13 @@ Required overlays: `i2c0 uart1 uart2 uart3 usbhost0 usbhost1 usbhost2 usbhost3 w
 Access at `http://<ip>:5050/` (password protected).  
 Supports 16 relays in two groups of 8 with **toggle** and **switch** (radio) modes.  
 Default password: `1234` — change it in `web/password.txt`.
+
+
+![WEB1](pics/nano-server-web-1.png)
+
+![WEB2](pics/nano-server-web-2.png)
+
+![WEB3](pics/nano-server-web-3.png)
 
 ---
 
@@ -223,30 +226,7 @@ nano-server/
 └── docs/
     ├── gpio-info.txt              # GPIO line numbers reference
     └── nano-pinout.jpg            # NanoPi NEO pinout diagram
+└── KiCad/                         # KiCad schematic and PCB files   
 ```
 
 ---
-
-## License
-
-MIT License
-
-Copyright (c) RA0SMS 2026
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
