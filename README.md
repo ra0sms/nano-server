@@ -143,6 +143,13 @@ Required overlays: `i2c0 uart1 uart2 uart3 usbhost0 usbhost1 usbhost2 usbhost3 w
 | Config | `http://<ip>:8080/config` | IP addresses, audio settings, profiles |
 | Status | `http://<ip>:8080/status` | Client RTT / connection status |
 
+![WEB4](pics/nano-server-web-4.png)
+
+![WEB5](pics/nano-server-web-5.png)
+
+![WEB6](pics/nano-server-web-6.png)
+
+
 ### Relay Control — port 5050
 
 Access at `http://<ip>:5050/` (password protected).  
