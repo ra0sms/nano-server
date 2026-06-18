@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 import asyncio
+import glob
+import ipaddress
 import json
 import os
+import re
+import socket
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -156,6 +161,240 @@ def save_relay_config():
     with open(tmp, "w") as f:
         json.dump(config, f, indent=2)
     os.replace(tmp, CONFIG_FILE)
+
+
+# ================= AUDIO & NETWORK CONFIG =================
+
+# Audio/network paths (from web_config_server.py)
+PROJECT_DIR = "/home/pi/nano-server"
+SERVER_IP_FILE = os.path.join(PROJECT_DIR, "server_ip.cfg")
+CLIENT_IP_FILE = os.path.join(PROJECT_DIR, "client_ip.cfg")
+AUDIO_CONFIG_FILE = os.path.join(PROJECT_DIR, "audio/audio_config.cfg")
+PROFILES_DIR = os.path.join(PROJECT_DIR, "profiles")
+
+# UDP Ping configuration
+UDP_PORT = 5002
+TIMEOUT = 1.0
+CHECK_INTERVAL = 0.3
+MAGIC_PHRASE = b"PING_RESPONSE"
+
+# Global variables for status
+current_rtt = None
+last_update = None
+status_active = False
+status_thread = None
+status_lock = threading.Lock()
+
+# Ensure profiles directory exists
+if not os.path.exists(PROFILES_DIR):
+    os.makedirs(PROFILES_DIR)
+
+# Audio ALSA controls
+SPEAKER = "Speaker"
+MIC = "numid=8"
+
+
+def get_local_ip():
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception as e:
+        print(f"Error getting local IP: {e}")
+        return "Not available"
+
+
+def start_status_monitoring():
+    global status_active, status_thread
+    if not status_active:
+        status_active = True
+        status_thread = threading.Thread(target=update_status, daemon=True)
+        status_thread.start()
+
+
+def is_valid_ip(ip_str):
+    try:
+        ipaddress.ip_address(ip_str.strip())
+        return True
+    except ValueError:
+        return False
+
+
+def get_ip_from_file(filepath):
+    try:
+        with open(filepath, "r") as f:
+            ip = f.read().strip()
+            if not ip:
+                raise ValueError("IP address is empty")
+            return ip
+    except Exception:
+        return None
+
+
+def measure_udp_rtt(ip):
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(TIMEOUT)
+            start = time.perf_counter()
+            s.sendto(b"PING_REQUEST", (ip, UDP_PORT))
+            data, addr = s.recvfrom(1024)
+            if data == MAGIC_PHRASE and addr[0] == ip:
+                return (time.perf_counter() - start) * 1000
+    except Exception:
+        return None
+
+
+def update_status():
+    global current_rtt, last_update, status_active
+    while status_active:
+        ip = get_ip_from_file(CLIENT_IP_FILE)
+        if ip:
+            rtt = measure_udp_rtt(ip)
+            with status_lock:
+                current_rtt = rtt
+                last_update = time.strftime("%H:%M:%S")
+        else:
+            with status_lock:
+                current_rtt = None
+                last_update = "No client IP configured"
+        time.sleep(CHECK_INTERVAL)
+
+
+def percent_to_alsa(vol_percent):
+    return min(35, max(0, round(float(vol_percent) * 35 / 100)))
+
+
+def alsa_to_percent(alsa_value):
+    return min(100, max(0, round(float(alsa_value) * 100 / 35)))
+
+
+def get_mic_value():
+    try:
+        result = subprocess.run(
+            ["amixer", "-c0", "cget", MIC], capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.splitlines():
+            if line.strip().startswith(": values="):
+                val = line.strip().split("values=")[1].split(",")[0].strip()
+                return int(val) if val.isdigit() else 8
+    except Exception:
+        pass
+    return 8
+
+
+def get_speaker_volume():
+    try:
+        result = subprocess.run(
+            ["amixer", "-c0", "get", SPEAKER], capture_output=True, text=True, timeout=5
+        )
+        m = re.search(r"(\d+)%", result.stdout)
+        return m.group(1) if m else "50"
+    except Exception:
+        return "50"
+
+
+def read_config_file(path):
+    try:
+        with open(path, "r") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
+def write_config_file(path, content):
+    with open(path, "w") as f:
+        f.write(content.strip())
+
+
+def read_audio_config():
+    defaults = (48000, 100000)
+    try:
+        with open(AUDIO_CONFIG_FILE, "r") as f:
+            lines = f.readlines()
+            rate = defaults[0]
+            buffer_time = defaults[1]
+            for line in lines:
+                line = line.strip()
+                if line.startswith("RATE="):
+                    rate = int(line.split("=")[1])
+                elif line.startswith("LATENCY="):
+                    buffer_time = int(line.split("=")[1])
+            return rate, buffer_time
+    except Exception as e:
+        print(f"Error reading audio config: {e}")
+        return defaults
+
+
+def write_audio_config(rate, buffer_time):
+    content = f"RATE={rate}\nLATENCY={buffer_time}\n"
+    write_config_file(AUDIO_CONFIG_FILE, content)
+
+
+def get_profiles_list():
+    files = glob.glob(os.path.join(PROFILES_DIR, "*.cfg"))
+    names = []
+    for f in files:
+        names.append(os.path.basename(f).replace(".cfg", ""))
+    return sorted(names)
+
+
+def save_profile(name):
+    if not name or not name.replace("_", "").isalnum():
+        return False, "Invalid profile name (use letters and numbers only)"
+    path = os.path.join(PROFILES_DIR, f"{name}.cfg")
+    server_ip = read_config_file(SERVER_IP_FILE)
+    client_ip = read_config_file(CLIENT_IP_FILE)
+    rate, buffer_time = read_audio_config()
+    content = f"[Server]\nIP={server_ip}\n\n[Client]\nIP={client_ip}\n\n[Audio]\nRate={rate}\nLatency={buffer_time}\n"
+    try:
+        with open(path, "w") as f:
+            f.write(content)
+        return True, "Profile saved successfully!"
+    except Exception as e:
+        return False, f"Error saving profile: {str(e)}"
+
+
+def load_profile(name):
+    path = os.path.join(PROFILES_DIR, f"{name}.cfg")
+    if not os.path.exists(path):
+        return False, "Profile not found"
+    try:
+        with open(path, "r") as f:
+            content = f.read()
+        server_ip = ""
+        client_ip = ""
+        rate = 48000
+        buffer_time = 100000
+        parts = content.split("[")
+        for part in parts:
+            if part.startswith("Server]"):
+                for line in part.split("\n"):
+                    if line.startswith("IP="):
+                        server_ip = line.split("=")[1].strip()
+            elif part.startswith("Client]"):
+                for line in part.split("\n"):
+                    if line.startswith("IP="):
+                        client_ip = line.split("=")[1].strip()
+            elif part.startswith("Audio]"):
+                for line in part.split("\n"):
+                    if line.startswith("Rate="):
+                        rate = int(line.split("=")[1].strip())
+                    if line.startswith("Latency="):
+                        buffer_time = int(line.split("=")[1].strip())
+        write_config_file(SERVER_IP_FILE, server_ip)
+        write_config_file(CLIENT_IP_FILE, client_ip)
+        write_audio_config(rate, buffer_time)
+        return True, f"Profile '{name}' loaded successfully! Restart services to apply."
+    except Exception as e:
+        return False, f"Error loading profile: {str(e)}"
+
+
+def delete_profile(name):
+    path = os.path.join(PROFILES_DIR, f"{name}.cfg")
+    if os.path.exists(path):
+        os.remove(path)
+        return True, "Profile deleted"
+    return False, "Profile not found"
 
 
 # ================= TRANSFER FUNCTIONS =================
@@ -678,6 +917,46 @@ HTML_TEMPLATE = """
             z-index: 9999;
         }
         .toast.show { opacity: 1; }
+        .value-display { font-size: 18px; margin-top: 10px; padding: 10px; background: #2a2d34; border-radius: 6px; text-align: center; }
+        .status-display { font-size: 24px; font-weight: bold; text-align: center; margin: 20px 0; }
+        .good { color: #1faa59; }
+        .warning { color: #f39c12; }
+        .bad { color: #d64545; }
+        .timestamp { font-size: 14px; color: #7f8c8d; text-align: center; }
+        .profile-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .profile-card {
+            background: #2a2d34;
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 15px;
+            text-align: center;
+        }
+        .profile-name {
+            font-weight: bold;
+            margin-bottom: 10px;
+            display: block;
+            color: #e6e6e6;
+        }
+        .profile-actions {
+            display: flex;
+            justify-content: center;
+            gap: 5px;
+        }
+        .btn-small {
+            padding: 5px 10px;
+            font-size: 14px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .btn-success { background: #1faa59; color: white; }
+        .btn-danger { background: #d64545; color: white; }
+        .danger { background: #d64545; color: white; }
     </style>
 </head>
 <body>
@@ -686,6 +965,9 @@ HTML_TEMPLATE = """
     <div class="tabs">
         <div class="tab active" data-tab="main">Main</div>
         <div class="tab" data-tab="trx">TRX</div>
+        <div class="tab" data-tab="audio">Audio</div>
+        <div class="tab" data-tab="config">Config</div>
+        <div class="tab" data-tab="status">Status</div>
         <div class="tab" data-tab="settings">Settings</div>
         <div class="tab" onclick="location.href='/logout'">Logout</div>
     </div>
@@ -776,6 +1058,74 @@ HTML_TEMPLATE = """
                 <button class="save-btn" onclick="saveTrxSettings()" style="width: 100%; margin-bottom: 10px;">Save TRX Settings</button>
                 <button class="save-btn" onclick="saveAllSettings()" style="width: 100%;">Save All Settings</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Audio Panel -->
+    <div id="audio-panel" class="panel">
+        <div class="group">
+            <h2>Audio OUT</h2>
+            <input type="range" id="speaker-slider" min="0" max="100" value="50" oninput="document.getElementById('speaker-val').textContent=this.value+'%'">
+            <div class="value-display" id="speaker-val">50%</div>
+            <button class="save-btn" onclick="setSpeaker()">Set Speaker</button>
+        </div>
+        <div class="group">
+            <h2>Audio IN</h2>
+            <input type="range" id="mic-slider" min="0" max="100" value="50" oninput="document.getElementById('mic-val').textContent=this.value+'%'">
+            <div class="value-display" id="mic-val">50%</div>
+            <button class="save-btn" onclick="setMic()">Set Capture</button>
+        </div>
+    </div>
+
+    <!-- Config Panel -->
+    <div id="config-panel" class="panel">
+        <div class="group">
+            <h2>Saved Profiles</h2>
+            <div id="profile-grid" class="profile-grid"></div>
+        </div>
+        <div class="group">
+            <h2>Server IP Configuration (Local)</h2>
+            <textarea id="server-ip-input" style="width:100%;height:40px;padding:10px;border:1px solid #444;border-radius:6px;background:#2a2d34;color:white;font-family:monospace;margin-bottom:15px;resize:vertical;"></textarea>
+            <button class="save-btn" onclick="saveServerIp()">Save Server Config</button>
+        </div>
+        <div class="group">
+            <h2>Client IP Configuration (Remote)</h2>
+            <textarea id="client-ip-input" style="width:100%;height:40px;padding:10px;border:1px solid #444;border-radius:6px;background:#2a2d34;color:white;font-family:monospace;margin-bottom:15px;resize:vertical;"></textarea>
+            <button class="save-btn" onclick="saveClientIp()">Save Client Config</button>
+        </div>
+        <div class="group">
+            <h2>Audio Stream Settings</h2>
+            <label>Sample Rate:</label>
+            <select id="audio-rate">
+                <option value="48000">48000 Hz</option>
+                <option value="24000">24000 Hz</option>
+            </select>
+            <label>Buffer Time (alsasrc):</label>
+            <select id="audio-buffer">
+                <option value="50000">50 ms (50000 µs)</option>
+                <option value="100000">100 ms (100000 µs)</option>
+                <option value="200000">200 ms (200000 µs)</option>
+                <option value="300000">300 ms (300000 µs)</option>
+                <option value="400000">400 ms (400000 µs)</option>
+                <option value="500000">500 ms (500000 µs)</option>
+            </select>
+            <button class="save-btn" onclick="saveAudioSettings()" style="margin-top:10px;">Save Audio Settings</button>
+        </div>
+        <div class="group">
+            <button class="save-btn danger" onclick="restartServices()" style="background:#d64545;">Restart Services</button>
+        </div>
+    </div>
+
+    <!-- Status Panel -->
+    <div id="status-panel" class="panel">
+        <div class="group" style="text-align:center;">
+            <h2>Network Information</h2>
+            <div class="value-display" id="local-ip"><strong>Local IP:</strong> Loading...</div>
+            <h2>Connection to Client</h2>
+            <div id="connection-status" class="status-display" style="font-size:24px;font-weight:bold;text-align:center;margin:20px 0;">
+                <span id="rtt-value">--</span>
+            </div>
+            <div id="timestamp" class="timestamp" style="font-size:14px;color:#7f8c8d;text-align:center;">Last updated: --</div>
         </div>
     </div>
 
@@ -995,6 +1345,232 @@ HTML_TEMPLATE = """
             }
         }, 2000);
 
+        // ================= Audio functions =================
+        function loadAudioState() {
+            fetch('/audio/state')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('speaker-slider').value = data.speaker;
+                    document.getElementById('speaker-val').textContent = data.speaker + '%';
+                    document.getElementById('mic-slider').value = data.mic;
+                    document.getElementById('mic-val').textContent = data.mic + '%';
+                })
+                .catch(() => {});
+        }
+
+        function setSpeaker() {
+            const val = document.getElementById('speaker-slider').value;
+            fetch('/audio/speaker', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({volume: parseInt(val)})
+            }).then(r => {
+                if (r.ok) showToast('✅ Speaker volume set to ' + val + '%', true);
+                else showToast('❌ Failed to set speaker', false);
+            }).catch(() => showToast('❌ Network error', false));
+        }
+
+        function setMic() {
+            const val = document.getElementById('mic-slider').value;
+            fetch('/audio/mic', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({volume: parseInt(val)})
+            }).then(r => {
+                if (r.ok) showToast('✅ Mic capture set to ' + val + '%', true);
+                else showToast('❌ Failed to set mic', false);
+            }).catch(() => showToast('❌ Network error', false));
+        }
+
+        // ================= Config functions =================
+        function loadConfig() {
+            fetch('/config/data')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('server-ip-input').value = data.server_ip;
+                    document.getElementById('client-ip-input').value = data.client_ip;
+                    document.getElementById('audio-rate').value = data.audio_rate;
+                    document.getElementById('audio-buffer').value = data.audio_buffer;
+
+                    // Profiles
+                    const grid = document.getElementById('profile-grid');
+                    grid.innerHTML = '';
+                    data.profiles.forEach(name => {
+                        const card = document.createElement('div');
+                        card.className = 'profile-card';
+                        card.innerHTML = `
+                            <span class="profile-name">${name}</span>
+                            <div class="profile-actions">
+                                <button class="btn-small btn-success" onclick="loadProfile('${name}')">Load</button>
+                                <button class="btn-small btn-danger" onclick="deleteProfile('${name}')">Del</button>
+                            </div>
+                        `;
+                        grid.appendChild(card);
+                    });
+                    // Empty slot
+                    if (data.profiles.length < 5) {
+                        const slot = document.createElement('div');
+                        slot.className = 'profile-card';
+                        slot.style.borderStyle = 'dashed';
+                        slot.innerHTML = `
+                            <span class="profile-name" style="color:#666;">Empty Slot</span>
+                            <input type="text" id="new-profile-name" placeholder="Profile Name" style="width:100%;padding:5px;margin-bottom:5px;background:#2a2d34;color:white;border:1px solid #444;border-radius:4px;" maxlength="15">
+                            <button class="btn-small btn-success" onclick="saveProfile()">Save Current</button>
+                        `;
+                        grid.appendChild(slot);
+                    }
+                })
+                .catch(() => {});
+        }
+
+        function saveServerIp() {
+            const ip = document.getElementById('server-ip-input').value.trim();
+            fetch('/config/server_ip', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ip: ip})
+            }).then(r => {
+                if (r.ok) showToast('✅ Server IP saved', true);
+                else return r.text().then(t => { showToast('❌ ' + t, false); });
+            }).catch(() => showToast('❌ Network error', false));
+        }
+
+        function saveClientIp() {
+            const ip = document.getElementById('client-ip-input').value.trim();
+            fetch('/config/client_ip', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ip: ip})
+            }).then(r => {
+                if (r.ok) showToast('✅ Client IP saved', true);
+                else return r.text().then(t => { showToast('❌ ' + t, false); });
+            }).catch(() => showToast('❌ Network error', false));
+        }
+
+        function saveAudioSettings() {
+            const data = {
+                rate: parseInt(document.getElementById('audio-rate').value),
+                buffer: parseInt(document.getElementById('audio-buffer').value)
+            };
+            fetch('/config/audio', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            }).then(r => {
+                if (r.ok) showToast('✅ Audio settings saved', true);
+                else showToast('❌ Failed to save audio settings', false);
+            }).catch(() => showToast('❌ Network error', false));
+        }
+
+        function saveProfile() {
+            const name = document.getElementById('new-profile-name');
+            if (!name || !name.value.trim()) {
+                showToast('❌ Enter a profile name', false);
+                return;
+            }
+            fetch('/config/save_profile', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: name.value.trim()})
+            }).then(r => r.json()).then(data => {
+                if (data.success) {
+                    showToast('✅ ' + data.message, true);
+                    loadConfig();
+                } else {
+                    showToast('❌ ' + data.message, false);
+                }
+            }).catch(() => showToast('❌ Network error', false));
+        }
+
+        function loadProfile(name) {
+            fetch('/config/load_profile', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: name})
+            }).then(r => r.json()).then(data => {
+                if (data.success) {
+                    showToast('✅ ' + data.message, true);
+                    loadConfig();
+                } else {
+                    showToast('❌ ' + data.message, false);
+                }
+            }).catch(() => showToast('❌ Network error', false));
+        }
+
+        function deleteProfile(name) {
+            if (!confirm('Delete profile ' + name + '?')) return;
+            fetch('/config/delete_profile', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: name})
+            }).then(r => r.json()).then(data => {
+                if (data.success) {
+                    showToast('✅ ' + data.message, true);
+                    loadConfig();
+                } else {
+                    showToast('❌ ' + data.message, false);
+                }
+            }).catch(() => showToast('❌ Network error', false));
+        }
+
+        function restartServices() {
+            if (!confirm('Restart audio services?')) return;
+            fetch('/config/restart_services', {method: 'POST'})
+                .then(r => {
+                    if (r.ok) showToast('✅ Services restarted', true);
+                    else showToast('❌ Failed to restart', false);
+                }).catch(() => showToast('❌ Network error', false));
+        }
+
+        // ================= Status functions =================
+        function loadLocalIp() {
+            fetch('/status/local_ip')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('local-ip').innerHTML = '<strong>Local IP:</strong> ' + data.ip;
+                })
+                .catch(() => {});
+        }
+
+        function updateConnectionStatus() {
+            fetch('/status/connection')
+                .then(r => r.json())
+                .then(data => {
+                    const statusEl = document.getElementById('connection-status');
+                    const valueEl = document.getElementById('rtt-value');
+                    const timeEl = document.getElementById('timestamp');
+
+                    if (data.rtt !== null) {
+                        valueEl.textContent = data.rtt.toFixed(1) + ' ms';
+                        statusEl.className = 'status-display ' + data.status;
+                    } else {
+                        valueEl.textContent = '--';
+                        statusEl.className = 'status-display bad';
+                    }
+                    timeEl.textContent = 'Last updated: ' + data.timestamp;
+                })
+                .catch(() => {});
+        }
+
+        // Tab switch handler extension
+        const origTabHandler = document.querySelector('.tab').click;
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', function() {
+                const tabName = this.dataset.tab;
+                if (tabName === 'audio') loadAudioState();
+                if (tabName === 'config') loadConfig();
+                if (tabName === 'status') { loadLocalIp(); updateConnectionStatus(); }
+            });
+        });
+
+        // Auto-refresh status every 2 seconds when Status tab is active
+        setInterval(() => {
+            const activePanel = document.querySelector('.panel.active');
+            if (activePanel && activePanel.id === 'status-panel') {
+                updateConnectionStatus();
+            }
+        }, 2000);
+
         // Initialize
         loadRelays();
         loadTrxConfig();
@@ -1091,14 +1667,188 @@ def trx_config_route():
     data = request.json
     old_port = trx_config["serial_port"]
     old_baud = trx_config["baudrate"]
+    old_protocol = trx_config.get("protocol", "Icom")
 
     trx_config.update(data)
     save_trx_config()
 
-    if old_port != trx_config["serial_port"] or old_baud != trx_config["baudrate"]:
+    if (
+        old_port != trx_config["serial_port"]
+        or old_baud != trx_config["baudrate"]
+        or old_protocol != trx_config.get("protocol", "Icom")
+    ):
         init_serial()
 
     return "ok"
+
+
+# ================= AUDIO API =================
+
+
+@app.route("/audio/state")
+def audio_state():
+    if not auth():
+        return jsonify({})
+    speaker = get_speaker_volume()
+    mic_alsa = get_mic_value()
+    mic_pct = alsa_to_percent(mic_alsa)
+    return jsonify({"speaker": int(speaker), "mic": int(mic_pct)})
+
+
+@app.route("/audio/speaker", methods=["POST"])
+def audio_set_speaker():
+    if not auth():
+        return "no auth", 403
+    data = request.json
+    vol = data.get("volume", 50)
+    subprocess.run(["amixer", "-c0", "set", SPEAKER, f"{vol}%"], timeout=5)
+    subprocess.run(
+        ["/usr/sbin/alsactl", "-f", "/var/lib/alsa/asound.state", "store"],
+        timeout=5,
+    )
+    return "ok"
+
+
+@app.route("/audio/mic", methods=["POST"])
+def audio_set_mic():
+    if not auth():
+        return "no auth", 403
+    data = request.json
+    vol = data.get("volume", 50)
+    alsa_value = percent_to_alsa(vol)
+    subprocess.run(["amixer", "-c0", "cset", MIC, str(alsa_value)], timeout=5)
+    subprocess.run(
+        ["/usr/sbin/alsactl", "-f", "/var/lib/alsa/asound.state", "store"],
+        timeout=5,
+    )
+    return "ok"
+
+
+# ================= CONFIG API =================
+
+
+@app.route("/config/data")
+def config_data():
+    if not auth():
+        return jsonify({})
+    server_ip = read_config_file(SERVER_IP_FILE)
+    client_ip = read_config_file(CLIENT_IP_FILE)
+    audio_rate, audio_buffer = read_audio_config()
+    profiles = get_profiles_list()
+    return jsonify({
+        "server_ip": server_ip,
+        "client_ip": client_ip,
+        "audio_rate": audio_rate,
+        "audio_buffer": audio_buffer,
+        "profiles": profiles,
+    })
+
+
+@app.route("/config/server_ip", methods=["POST"])
+def config_set_server_ip():
+    if not auth():
+        return "no auth", 403
+    data = request.json
+    ip = data.get("ip", "").strip()
+    if not is_valid_ip(ip):
+        return f"Invalid IP address: '{ip}'", 400
+    write_config_file(SERVER_IP_FILE, ip)
+    return "ok"
+
+
+@app.route("/config/client_ip", methods=["POST"])
+def config_set_client_ip():
+    if not auth():
+        return "no auth", 403
+    data = request.json
+    ip = data.get("ip", "").strip()
+    if not is_valid_ip(ip):
+        return f"Invalid IP address: '{ip}'", 400
+    write_config_file(CLIENT_IP_FILE, ip)
+    return "ok"
+
+
+@app.route("/config/audio", methods=["POST"])
+def config_set_audio():
+    if not auth():
+        return "no auth", 403
+    data = request.json
+    rate = data.get("rate", 48000)
+    buffer_time = data.get("buffer", 100000)
+    write_audio_config(rate, buffer_time)
+    return "ok"
+
+
+@app.route("/config/save_profile", methods=["POST"])
+def config_save_profile():
+    if not auth():
+        return jsonify({"success": False, "message": "no auth"}), 403
+    data = request.json
+    name = data.get("name", "").strip()
+    profiles = get_profiles_list()
+    if len(profiles) >= 5:
+        return jsonify({"success": False, "message": "Maximum 5 profiles allowed"})
+    success, msg = save_profile(name)
+    return jsonify({"success": success, "message": msg})
+
+
+@app.route("/config/load_profile", methods=["POST"])
+def config_load_profile():
+    if not auth():
+        return jsonify({"success": False, "message": "no auth"}), 403
+    data = request.json
+    name = data.get("name", "").strip()
+    success, msg = load_profile(name)
+    return jsonify({"success": success, "message": msg})
+
+
+@app.route("/config/delete_profile", methods=["POST"])
+def config_delete_profile():
+    if not auth():
+        return jsonify({"success": False, "message": "no auth"}), 403
+    data = request.json
+    name = data.get("name", "").strip()
+    success, msg = delete_profile(name)
+    return jsonify({"success": success, "message": msg})
+
+
+@app.route("/config/restart_services", methods=["POST"])
+def config_restart_services():
+    if not auth():
+        return "no auth", 403
+    script_path = "/home/pi/nano-server/restart_services_on_server.sh"
+    try:
+        subprocess.run(["sudo", script_path], timeout=30, check=True)
+        return "ok"
+    except subprocess.SubprocessError as e:
+        return f"Failed: {e}", 500
+
+
+# ================= STATUS API =================
+
+
+@app.route("/status/local_ip")
+def status_local_ip():
+    if not auth():
+        return jsonify({"ip": "Not available"})
+    return jsonify({"ip": get_local_ip()})
+
+
+@app.route("/status/connection")
+def status_connection():
+    if not auth():
+        return jsonify({"rtt": None, "timestamp": "--", "status": "unknown"})
+    with status_lock:
+        status = (
+            "good"
+            if current_rtt and current_rtt < 50
+            else "warning"
+            if current_rtt and current_rtt < 100
+            else "bad"
+            if current_rtt is not None
+            else "unknown"
+        )
+        return jsonify({"rtt": current_rtt, "timestamp": last_update, "status": status})
 
 
 # ================= MAIN =================
@@ -1114,6 +1864,8 @@ async def main():
 
     if trx_config.get("enabled", True):
         init_serial()
+
+    start_status_monitoring()
 
     apply()
 
