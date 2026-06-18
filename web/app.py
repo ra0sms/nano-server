@@ -957,6 +957,44 @@ HTML_TEMPLATE = """
         .btn-success { background: #1faa59; color: white; }
         .btn-danger { background: #d64545; color: white; }
         .danger { background: #d64545; color: white; }
+        .audio-slider {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 12px;
+            margin: 15px 0;
+            background: #2a2d34;
+            border-radius: 6px;
+            outline: none;
+            cursor: pointer;
+        }
+        .audio-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 28px;
+            height: 28px;
+            background: #2d6cdf;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .audio-slider::-webkit-slider-thumb:hover {
+            background: #4a8af4;
+            transform: scale(1.1);
+        }
+        .audio-slider::-moz-range-thumb {
+            width: 28px;
+            height: 28px;
+            background: #2d6cdf;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+        .audio-slider::-moz-range-track {
+            background: #2a2d34;
+            border-radius: 6px;
+            height: 12px;
+        }
     </style>
 </head>
 <body>
@@ -1065,13 +1103,13 @@ HTML_TEMPLATE = """
     <div id="audio-panel" class="panel">
         <div class="group">
             <h2>Audio OUT</h2>
-            <input type="range" id="speaker-slider" min="0" max="100" value="50" oninput="document.getElementById('speaker-val').textContent=this.value+'%'">
+            <input type="range" id="speaker-slider" min="0" max="100" value="50" class="audio-slider">
             <div class="value-display" id="speaker-val">50%</div>
             <button class="save-btn" onclick="setSpeaker()">Set Speaker</button>
         </div>
         <div class="group">
             <h2>Audio IN</h2>
-            <input type="range" id="mic-slider" min="0" max="100" value="50" oninput="document.getElementById('mic-val').textContent=this.value+'%'">
+            <input type="range" id="mic-slider" min="0" max="100" value="50" class="audio-slider">
             <div class="value-display" id="mic-val">50%</div>
             <button class="save-btn" onclick="setMic()">Set Capture</button>
         </div>
@@ -1346,6 +1384,15 @@ HTML_TEMPLATE = """
         }, 2000);
 
         // ================= Audio functions =================
+        function updateSpeakerVal() {
+            const s = document.getElementById('speaker-slider');
+            document.getElementById('speaker-val').textContent = s.value + '%';
+        }
+        function updateMicVal() {
+            const m = document.getElementById('mic-slider');
+            document.getElementById('mic-val').textContent = m.value + '%';
+        }
+
         function loadAudioState() {
             fetch('/audio/state')
                 .then(r => r.json())
@@ -1357,6 +1404,14 @@ HTML_TEMPLATE = """
                 })
                 .catch(() => {});
         }
+
+        // Attach live value update on slider input
+        document.addEventListener('DOMContentLoaded', function() {
+            const sp = document.getElementById('speaker-slider');
+            const mc = document.getElementById('mic-slider');
+            if (sp) sp.addEventListener('input', updateSpeakerVal);
+            if (mc) mc.addEventListener('input', updateMicVal);
+        });
 
         function setSpeaker() {
             const val = document.getElementById('speaker-slider').value;
