@@ -87,7 +87,7 @@ setup_service() {
 }
 
 services=("ptt_server" "audio_server" "audio_client_on_server"
-          "web_config_server" "alsa_restore" "mjpeg-streamer" "relay-web")
+          "alsa_restore" "mjpeg-streamer" "relay-web")
 
 for service in "${services[@]}"; do
   setup_service "$service"

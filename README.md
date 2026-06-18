@@ -14,7 +14,7 @@ Desktop client software: https://github.com/ra0sms/caesar-client-desktop
 - 📡 **PTT control** via GPIO with client reachability monitoring
 - 📷 **Video streaming** via mjpg-streamer (MJPEG over HTTP)
 - 🔌 **Relay control** via I2C (2×PCF8574T, 16 relays total)
-- 🌐 **Web configuration** — IP addresses, audio settings, volume, profiles
+- 🌐 **Web interface** — relays, TRX, audio, config, status (single UI on port 5050)
 - 🔗 **CAT interface** forwarding over TCP
 - 🔒 **Fail-safe** — PTT is forced OFF when client disconnects
 
@@ -44,8 +44,7 @@ Client PC                          NanoPi NEO (Server)
                     UDP :5000  ──→  Audio RX (client → speaker)
                     UDP :5001  ──→  PTT commands (0/1)
                     UDP :5002  ←→   Ping / RTT monitoring
-                    TCP :8080  ←──  Web config UI (Flask)
-                    TCP :5050  ←──  Relay control UI (Flask)
+                    TCP :5050  ←──  Web UI (Flask): relays, TRX, audio, config, status
                     TCP :8081  ←──  MJPEG video stream
                     TCP :3001  ←──  CAT
 ```
@@ -57,8 +56,7 @@ Client PC                          NanoPi NEO (Server)
 | `ptt_server` | PTT GPIO control + client monitor + ping responder |
 | `audio_server` | GStreamer audio TX (server mic → client) |
 | `audio_client_on_server` | GStreamer audio RX (client → server speaker) |
-| `web_config_server` | Web UI: volume, IP config, audio settings, profiles |
-| `relay-web` | Web UI: relay switching via I2C and TRX control|
+| `relay-web` | Web UI: relays, TRX, audio, config, status (port 5050) |
 | `mjpeg-streamer` | MJPEG video stream from USB camera |
 | `alsa_restore` | Restores ALSA mixer state at boot |
 
@@ -96,9 +94,9 @@ echo '192.168.1.100' > /home/pi/nano-server/client_ip.cfg   # IP of the client P
 echo '192.168.1.10'  > /home/pi/nano-server/server_ip.cfg   # IP of this server
 ```
 
-Or use the web configuration interface at `http://<server-ip>:8080/config`.
+Or use the web interface at `http://<server-ip>:5050/`.
 
-### 5. Change the default password for the relay web panel
+### 5. Change the default password for the web panel
 
 ```bash
 echo 'yourpassword' > /home/pi/nano-server/web/password.txt
@@ -135,27 +133,19 @@ Required overlays: `i2c0 uart1 uart2 uart3 usbhost0 usbhost1 usbhost2 usbhost3 w
 
 ## Web Interfaces
 
-### Configuration & Volume — port 8080
+### Web Interface — port 5050
 
-| Page | URL | Description |
-|---|---|---|
-| Volume | `http://<ip>:8080/` | Speaker and mic level control |
-| Config | `http://<ip>:8080/config` | IP addresses, audio settings, profiles |
-| Status | `http://<ip>:8080/status` | Client RTT / connection status |
-
-![WEB4](pics/nano-server-web-4.png)
-
-![WEB5](pics/nano-server-web-5.png)
-
-![WEB6](pics/nano-server-web-6.png)
-
-
-### Relay Control — port 5050
-
-Access at `http://<ip>:5050/` (password protected).  
-Supports 16 relays in two groups of 8 with **toggle** and **switch** (radio) modes.  
+Access at `http://<ip>:5050/` (password protected).
 Default password: `1234` — change it in `web/password.txt`.
 
+| Tab | Description |
+|---|---|
+| Main | Relay switching (16 relays, toggle/switch modes) and camera view |
+| TRX | Transceiver frequency, band, mode display |
+| Audio | Speaker and mic level control |
+| Config | IP addresses, audio stream settings, profiles |
+| Status | Client RTT / connection status |
+| Settings | Relay names, group modes, TRX serial port and protocol |
 
 ![WEB1](pics/nano-server-web-1.png)
 
@@ -226,10 +216,9 @@ nano-server/
 ├── network/
 │   └── combined_ptt_service.py    # PTT + ping monitor + ping responder
 ├── web/
-│   ├── web_config_server.py       # Config/volume/status web UI
-│   ├── app.py                     # Relay control web UI
+│   ├── app.py                     # Web UI: relays, TRX, audio, config, status
 │   ├── config.json                # Relay names and group modes
-│   └── password.txt               # Relay UI password (git-ignored)
+│   └── password.txt               # Web UI password (git-ignored)
 ├── systemd/                       # Service unit files
 ├── profiles/                      # Saved configuration profiles (git-ignored)
 └── docs/
