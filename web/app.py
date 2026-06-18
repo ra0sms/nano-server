@@ -243,6 +243,95 @@ class CIVDecoder:
             radio_state["mode"] = modes.get(mode_byte, "Unknown")
 
 
+class KenwoodDecoder:
+    """Decoder for Kenwood CAT protocol (ASCII-based, terminated by ';')."""
+
+    def __init__(self):
+        self.buffer = bytearray()
+
+    def feed(self, data):
+        self.buffer.extend(data)
+        while True:
+            try:
+                end = self.buffer.index(0x3B)  # ';'
+            except ValueError:
+                # Keep buffer, wait for more data
+                return
+            frame = bytes(self.buffer[: end + 1])
+            del self.buffer[: end + 1]
+            self.process_frame(frame)
+
+    def process_frame(self, frame):
+        if len(frame) < 3:
+            return
+
+        radio_state["last_rx"] = time.time()
+        radio_state["online"] = True
+
+        try:
+            text = frame.decode("ascii", errors="replace").strip()
+        except Exception:
+            return
+
+        if not text.endswith(";"):
+            return
+        text = text[:-1]  # strip ';'
+
+        # Frequency response: FAxxxxxxxxxx
+        if text.startswith("FA") and len(text) >= 12:
+            try:
+                freq_hz = int(text[2:12])
+                if 100000 <= freq_hz <= 3000000000:
+                    radio_state["freq"] = freq_hz
+                    radio_state["band"] = freq_to_band(freq_hz)
+                    print(f"[TRX] Freq={freq_hz / 1000000:.6f} MHz (Kenwood)")
+            except ValueError:
+                pass
+
+        # Mode response: MDx
+        elif text.startswith("MD") and len(text) >= 3:
+            mode_map = {
+                "1": "LSB",
+                "2": "USB",
+                "3": "CW",
+                "4": "FM",
+                "5": "AM",
+                "6": "RTTY",
+                "7": "CW",
+                "8": "FM",
+                "9": "FM",
+            }
+            mode_digit = text[2]
+            radio_state["mode"] = mode_map.get(mode_digit, "Unknown")
+
+        # Combined status: IFxxxxxxxxxxyyyyymzzzz;
+        # xxxxxxxxxx = 10-digit frequency in Hz
+        # yyyyy = 5-digit mode/status
+        # m = mode digit
+        elif text.startswith("IF") and len(text) >= 20:
+            try:
+                freq_hz = int(text[2:12])
+                if 100000 <= freq_hz <= 3000000000:
+                    radio_state["freq"] = freq_hz
+                    radio_state["band"] = freq_to_band(freq_hz)
+            except ValueError:
+                pass
+            if len(text) >= 18:
+                mode_map = {
+                    "1": "LSB",
+                    "2": "USB",
+                    "3": "CW",
+                    "4": "FM",
+                    "5": "AM",
+                    "6": "RTTY",
+                    "7": "CW",
+                    "8": "FM",
+                    "9": "FM",
+                }
+                mode_digit = text[17]
+                radio_state["mode"] = mode_map.get(mode_digit, "Unknown")
+
+
 def load_trx_config():
     global trx_config
     if TRX_CONFIG_FILE.exists():
@@ -275,7 +364,13 @@ def init_serial():
         ser = serial.Serial(
             trx_config["serial_port"], trx_config["baudrate"], timeout=0.1
         )
-        decoder = CIVDecoder()
+        protocol = trx_config.get("protocol", "Icom")
+        if protocol == "Kenwood":
+            decoder = KenwoodDecoder()
+            print(f"[TRX] Using Kenwood CAT protocol")
+        else:
+            decoder = CIVDecoder()
+            print(f"[TRX] Using Icom CI-V protocol")
         radio_state["online"] = True
         print(f"[TRX] Connected to {trx_config['serial_port']}")
         return True
@@ -345,9 +440,15 @@ async def poller():
         if time.time() - radio_state["last_rx"] > 5:
             radio_state["online"] = False
 
-        cmd = bytes(
-            [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x03, 0xFD]
-        )
+        protocol = trx_config.get("protocol", "Icom")
+        if protocol == "Kenwood":
+            # Kenwood CAT: IF; returns frequency + mode of the active VFO (A or B)
+            cmd = b"IF;"
+        else:
+            # Icom CI-V: poll frequency
+            cmd = bytes(
+                [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x03, 0xFD]
+            )
         try:
             ser.write(cmd)
         except:
