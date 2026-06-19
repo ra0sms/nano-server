@@ -299,7 +299,9 @@ def _find_speaker_control():
 
 
 def _find_mic_control():
-    """Auto-detect the microphone capture control numid."""
+    """Auto-detect the microphone capture volume control numid.
+    Looks for 'Capture Volume' or 'Mic Capture' (not 'Playback').
+    """
     try:
         r = subprocess.run(
             ["amixer", "-c", ALSA_CARD, "contents"],
@@ -311,7 +313,8 @@ def _find_mic_control():
                 if m:
                     numid = m.group(1)
                     name = m.group(2)
-                    if "Capture" in name or "Mic" in name:
+                    # Must be a capture control, not playback
+                    if ("Capture" in name and "Volume" in name) or "Mic Capture" in name:
                         try:
                             r2 = subprocess.run(
                                 ["amixer", "-c", ALSA_CARD, "cget", f"numid={numid}"],
@@ -324,6 +327,22 @@ def _find_mic_control():
                             pass
     except Exception as e:
         print(f"[audio] Mic detection failed: {e}")
+
+    # Fallback: try known numids for C-Media USB Audio
+    for fallback_numid in ["8", "7", "4", "3"]:
+        try:
+            r = subprocess.run(
+                ["amixer", "-c", ALSA_CARD, "cget", f"numid={fallback_numid}"],
+                capture_output=True, text=True, timeout=3
+            )
+            if r.returncode == 0 and (": values=" in r.stdout or "| items" in r.stdout):
+                # Check if it's a capture volume (has a range of values)
+                for line in r.stdout.splitlines():
+                    if "values=" in line and "Capture" in r.stdout:
+                        print(f"[audio] Fallback mic control: numid={fallback_numid}")
+                        return f"numid={fallback_numid}"
+        except Exception:
+            pass
 
     print("[audio] WARNING: no mic control found, falling back to numid=8")
     return "numid=8"
