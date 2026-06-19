@@ -189,8 +189,23 @@ status_lock = threading.Lock()
 if not os.path.exists(PROFILES_DIR):
     os.makedirs(PROFILES_DIR)
 
-# Audio ALSA controls
-SPEAKER = "Speaker"
+# Audio ALSA controls — auto-detected
+def _find_speaker_control():
+    """Find the first 'Speaker' or 'PCM' playback simple control."""
+    for name in ["Speaker", "PCM", "Headphone", "Master"]:
+        try:
+            r = subprocess.run(
+                ["amixer", "-c0", "get", name],
+                capture_output=True, text=True, timeout=3
+            )
+            if r.returncode == 0 and "%" in r.stdout:
+                return name
+        except Exception:
+            pass
+    return "Speaker"  # fallback
+
+
+SPEAKER = _find_speaker_control()
 MIC = "numid=8"
 
 
@@ -1757,10 +1772,6 @@ def audio_set_speaker():
     data = request.json
     vol = data.get("volume", 50)
     subprocess.run(["amixer", "-c0", "set", SPEAKER, f"{vol}%"], timeout=5)
-    subprocess.run(
-        ["/usr/sbin/alsactl", "-f", "/var/lib/alsa/asound.state", "store"],
-        timeout=5,
-    )
     return "ok"
 
 
@@ -1772,10 +1783,6 @@ def audio_set_mic():
     vol = data.get("volume", 50)
     alsa_value = percent_to_alsa(vol)
     subprocess.run(["amixer", "-c0", "cset", MIC, str(alsa_value)], timeout=5)
-    subprocess.run(
-        ["/usr/sbin/alsactl", "-f", "/var/lib/alsa/asound.state", "store"],
-        timeout=5,
-    )
     return "ok"
 
 
