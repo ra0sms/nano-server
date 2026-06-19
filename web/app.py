@@ -213,6 +213,7 @@ def save_band_rules():
 def apply_band_rules(freq_hz):
     """Check band rules and activate relays for the given frequency (in Hz).
     Returns the list of relay indices that should be ON.
+    Rules: from <= freq_khz < to (lower bound inclusive, upper bound exclusive).
     """
     if not band_rules or not freq_hz:
         return []
@@ -223,7 +224,7 @@ def apply_band_rules(freq_hz):
     # Find matching rules (a frequency can match multiple rules)
     active_relays = set()
     for rule in band_rules:
-        if rule["from"] <= freq_khz <= rule["to"]:
+        if rule["from"] <= freq_khz < rule["to"]:
             for r in rule.get("relays", []):
                 if 0 <= r <= 15:
                     active_relays.add(r)
@@ -1247,7 +1248,7 @@ HTML_TEMPLATE = """
     <div id="bandrelay-panel" class="panel">
         <div class="group">
             <h2>Band Relay Rules</h2>
-            <p style="margin-bottom:15px;color:#aaa;">Configure which relays activate for each frequency range (in kHz). Changes are saved immediately.</p>
+            <p style="margin-bottom:15px;color:#aaa;">Configure which relays activate for each frequency range (in kHz). Rule: <b>from ≤ freq < to</b> (lower bound inclusive, upper bound exclusive). To avoid gaps, set <b>to</b> of one rule equal to <b>from</b> of the next.</p>
             <div style="margin-bottom:15px;padding:10px;background:#2a2d34;border-radius:6px;display:flex;align-items:center;gap:10px;">
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:16px;">
                     <input type="checkbox" id="bandrelay-enabled" onchange="toggleBandRelay()" style="width:20px;height:20px;cursor:pointer;" checked>
