@@ -94,7 +94,10 @@ for service in "${services[@]}"; do
 done
 
 sudoers_entry="pi ALL=(ALL) NOPASSWD: /home/pi/nano-server/restart_services_on_server.sh"
-echo "$sudoers_entry" | tee /etc/sudoers.d/nano-server > /dev/null
+echo "$sudoers_entry" > /etc/sudoers.d/nano-server
+echo "pi ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart relay-web" >> /etc/sudoers.d/nano-server
+echo "pi ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop relay-web" >> /etc/sudoers.d/nano-server
+echo "pi ALL=(ALL) NOPASSWD: /usr/bin/systemctl start relay-web" >> /etc/sudoers.d/nano-server
 chmod 0440 /etc/sudoers.d/nano-server
 
 echo -e "${GREEN}Configuration completed successfully. Please edit client_ip.cfg and server_ip.cfg, then reboot (sudo reboot).${NC}"

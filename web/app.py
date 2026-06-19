@@ -163,6 +163,94 @@ def save_relay_config():
     os.replace(tmp, CONFIG_FILE)
 
 
+# ================= BAND RELAY RULES =================
+
+BAND_RULES_FILE = Path(__file__).with_name("band_rules.json")
+
+# Default rules: one per amateur band
+default_band_rules = [
+    {"from": 1800, "to": 2000, "relays": []},
+    {"from": 3500, "to": 3800, "relays": []},
+    {"from": 7000, "to": 7200, "relays": []},
+    {"from": 10100, "to": 10150, "relays": []},
+    {"from": 14000, "to": 14350, "relays": []},
+    {"from": 18068, "to": 18168, "relays": []},
+    {"from": 21000, "to": 21450, "relays": []},
+    {"from": 24890, "to": 24990, "relays": []},
+    {"from": 28000, "to": 29700, "relays": []},
+    {"from": 50000, "to": 54000, "relays": []},
+]
+
+band_rules = []
+band_relay_enabled = True  # Global toggle for automatic relay switching
+
+
+def load_band_rules():
+    global band_rules
+    if BAND_RULES_FILE.exists():
+        try:
+            with open(BAND_RULES_FILE, "r") as f:
+                band_rules = json.load(f)
+            # Validate structure
+            for rule in band_rules:
+                if "from" not in rule or "to" not in rule or "relays" not in rule:
+                    raise ValueError("Invalid rule structure")
+        except Exception:
+            band_rules = default_band_rules.copy()
+            save_band_rules()
+    else:
+        band_rules = default_band_rules.copy()
+        save_band_rules()
+
+
+def save_band_rules():
+    tmp = BAND_RULES_FILE.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(band_rules, f, indent=2)
+    os.replace(tmp, BAND_RULES_FILE)
+
+
+def apply_band_rules(freq_hz):
+    """Check band rules and activate relays for the given frequency (in Hz).
+    Returns the list of relay indices that should be ON.
+    """
+    if not band_rules or not freq_hz:
+        return []
+
+    # Convert Hz to kHz for rule matching
+    freq_khz = freq_hz / 1000
+
+    # Find matching rules (a frequency can match multiple rules)
+    active_relays = set()
+    for rule in band_rules:
+        if rule["from"] <= freq_khz <= rule["to"]:
+            for r in rule.get("relays", []):
+                if 0 <= r <= 15:
+                    active_relays.add(r)
+
+    return sorted(active_relays)
+
+
+def set_relays_for_frequency(freq_hz):
+    """Set all 16 relays according to band rules for the given frequency."""
+    global state1, state2
+    if not band_relay_enabled:
+        return []
+
+    target = apply_band_rules(freq_hz)
+
+    # Turn all relays OFF first, then turn ON only the target ones
+    state1 = 0xFF
+    state2 = 0xFF
+
+    for r in target:
+        set_relay(r, True)
+
+    apply()
+    print(f"[BAND] Freq={freq_hz/1000:.1f} kHz -> relays ON: {target}")
+    return target
+
+
 # ================= AUDIO & NETWORK CONFIG =================
 
 # Audio/network paths (from web_config_server.py)
@@ -579,6 +667,7 @@ class CIVDecoder:
                     radio_state["freq"] = freq
                     radio_state["band"] = freq_to_band(freq)
                     print(f"[TRX] Freq={freq / 1000000:.6f} MHz")
+                    set_relays_for_frequency(freq)
 
         elif cmd == 0x04 and len(frame) >= 7:
             mode_byte = frame[5]
@@ -635,6 +724,7 @@ class KenwoodDecoder:
                     radio_state["freq"] = freq_hz
                     radio_state["band"] = freq_to_band(freq_hz)
                     print(f"[TRX] Freq={freq_hz / 1000000:.6f} MHz (Kenwood)")
+                    set_relays_for_frequency(freq_hz)
             except ValueError:
                 pass
 
@@ -664,6 +754,7 @@ class KenwoodDecoder:
                 if 100000 <= freq_hz <= 3000000000:
                     radio_state["freq"] = freq_hz
                     radio_state["band"] = freq_to_band(freq_hz)
+                    set_relays_for_frequency(freq_hz)
             except ValueError:
                 pass
             if len(text) >= 18:
@@ -1114,6 +1205,7 @@ HTML_TEMPLATE = """
     <div class="tabs">
         <div class="tab active" data-tab="main">Main</div>
         <div class="tab" data-tab="trx">TRX</div>
+        <div class="tab" data-tab="bandrelay">Band Relay</div>
         <div class="tab" data-tab="audio">Audio</div>
         <div class="tab" data-tab="config">Config</div>
         <div class="tab" data-tab="status">Status</div>
@@ -1148,6 +1240,38 @@ HTML_TEMPLATE = """
             <div id="trx-band">Band: ---</div>
             <div id="trx-mode">Mode: ---</div>
             <button class="refresh-btn" onclick="loadTrxState()">Refresh</button>
+        </div>
+    </div>
+
+    <!-- Band Relay Panel -->
+    <div id="bandrelay-panel" class="panel">
+        <div class="group">
+            <h2>Band Relay Rules</h2>
+            <p style="margin-bottom:15px;color:#aaa;">Configure which relays activate for each frequency range (in kHz). Changes are saved immediately.</p>
+            <div style="margin-bottom:15px;padding:10px;background:#2a2d34;border-radius:6px;display:flex;align-items:center;gap:10px;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:16px;">
+                    <input type="checkbox" id="bandrelay-enabled" onchange="toggleBandRelay()" style="width:20px;height:20px;cursor:pointer;" checked>
+                    <span>Auto relay switching</span>
+                </label>
+            </div>
+            <div id="bandrelay-status" style="margin-bottom:15px;padding:10px;background:#2a2d34;border-radius:6px;">
+                Current: <span id="bandrelay-current-freq">---</span> kHz → Relays: <span id="bandrelay-current-relays">none</span>
+            </div>
+            <table style="width:100%;border-collapse:collapse;margin-bottom:15px;">
+                <thead>
+                    <tr style="background:#2a2d34;">
+                        <th style="padding:8px;text-align:left;border-bottom:2px solid #444;">From (kHz)</th>
+                        <th style="padding:8px;text-align:left;border-bottom:2px solid #444;">To (kHz)</th>
+                        <th style="padding:8px;text-align:left;border-bottom:2px solid #444;">Active Relays (1-16)</th>
+                        <th style="padding:8px;text-align:center;border-bottom:2px solid #444;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="bandrelay-table-body">
+                </tbody>
+            </table>
+            <button class="save-btn" onclick="addBandRule()" style="margin-right:10px;">+ Add Rule</button>
+            <button class="save-btn" onclick="saveBandRules()">Save All Rules</button>
+            <button class="refresh-btn" onclick="loadBandRules()" style="margin-left:10px;">Refresh</button>
         </div>
     </div>
 
@@ -1261,7 +1385,8 @@ HTML_TEMPLATE = """
             <button class="save-btn" onclick="saveAudioSettings()" style="margin-top:10px;">Save Audio Settings</button>
         </div>
         <div class="group">
-            <button class="save-btn danger" onclick="restartServices()" style="background:#d64545;">Restart Services</button>
+            <button class="save-btn danger" onclick="restartServices()" style="background:#d64545;">Restart Audio Services</button>
+            <button class="save-btn danger" onclick="restartWebPanel()" style="background:#d64545;margin-left:10px;">Restart Web Panel</button>
         </div>
     </div>
 
@@ -1688,6 +1813,19 @@ HTML_TEMPLATE = """
                 }).catch(() => showToast('❌ Network error', false));
         }
 
+        function restartWebPanel() {
+            if (!confirm('Restart the web panel? The page will reload after restart.')) return;
+            fetch('/config/restart_web', {method: 'POST'})
+                .then(r => {
+                    if (r.ok) {
+                        showToast('🔄 Web panel restarting...', true);
+                        setTimeout(() => { location.reload(); }, 3000);
+                    } else {
+                        showToast('❌ Failed to restart web panel', false);
+                    }
+                }).catch(() => showToast('❌ Network error', false));
+        }
+
         // ================= Status functions =================
         function loadLocalIp() {
             fetch('/status/local_ip')
@@ -1734,6 +1872,141 @@ HTML_TEMPLATE = """
             const activePanel = document.querySelector('.panel.active');
             if (activePanel && activePanel.id === 'status-panel') {
                 updateConnectionStatus();
+            }
+        }, 2000);
+
+        // ================= Band Relay functions =================
+        let bandRules = [];
+
+        function loadBandRules() {
+            fetch('/bandrelay/rules')
+                .then(r => r.json())
+                .then(rules => {
+                    bandRules = rules;
+                    renderBandRules();
+                })
+                .catch(() => {});
+            // Also load current state
+            fetch('/bandrelay/state')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('bandrelay-current-freq').textContent =
+                        data.freq_khz ? data.freq_khz.toFixed(1) : '---';
+                    document.getElementById('bandrelay-current-relays').textContent =
+                        data.active_relays.length ? data.active_relays.map(r => r+1).join(', ') : 'none';
+                    document.getElementById('bandrelay-enabled').checked = data.enabled;
+                })
+                .catch(() => {});
+        }
+
+        function toggleBandRelay() {
+            const enabled = document.getElementById('bandrelay-enabled').checked;
+            fetch('/bandrelay/toggle', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({enabled: enabled})
+            }).then(r => {
+                if (r.ok) {
+                    showToast(enabled ? '🔁 Auto relay switching ON' : '⏸️ Auto relay switching OFF', true);
+                }
+            }).catch(() => showToast('❌ Network error', false));
+        }
+
+        function renderBandRules() {
+            const tbody = document.getElementById('bandrelay-table-body');
+            tbody.innerHTML = '';
+            if (!bandRules.length) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:20px;color:#666;">No rules configured. Click "+ Add Rule" to create one.</td></tr>';
+                return;
+            }
+            bandRules.forEach((rule, idx) => {
+                const tr = document.createElement('tr');
+                tr.style.borderBottom = '1px solid #333';
+                tr.innerHTML = `
+                    <td style="padding:6px;"><input type="number" class="br-from" value="${rule.from}" min="0" max="60000" style="width:100px;"></td>
+                    <td style="padding:6px;"><input type="number" class="br-to" value="${rule.to}" min="0" max="60000" style="width:100px;"></td>
+                    <td style="padding:6px;"><input type="text" class="br-relays" value="${rule.relays.map(r => r+1).join(',')}" placeholder="e.g. 1,2,16" style="width:100%;"></td>
+                    <td style="padding:6px;text-align:center;">
+                        <button class="btn-small btn-danger" onclick="deleteBandRule(${idx})">✕</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function addBandRule() {
+            bandRules.push({from: 7000, to: 7300, relays: []});
+            renderBandRules();
+            showToast('➕ New rule added. Set values and click "Save All Rules".', true);
+        }
+
+        function deleteBandRule(idx) {
+            bandRules.splice(idx, 1);
+            renderBandRules();
+            showToast('🗑️ Rule removed. Click "Save All Rules" to persist.', true);
+        }
+
+        function saveBandRules() {
+            // Read values from inputs
+            const rows = document.querySelectorAll('#bandrelay-table-body tr');
+            const newRules = [];
+            let hasError = false;
+            rows.forEach((tr, idx) => {
+                const fromInput = tr.querySelector('.br-from');
+                const toInput = tr.querySelector('.br-to');
+                const relaysInput = tr.querySelector('.br-relays');
+                if (!fromInput || !toInput || !relaysInput) return;
+                const fromVal = parseInt(fromInput.value);
+                const toVal = parseInt(toInput.value);
+                if (isNaN(fromVal) || isNaN(toVal) || fromVal < 0 || toVal < 0 || fromVal >= toVal) {
+                    showToast(`❌ Rule ${idx+1}: invalid frequency range`, false);
+                    hasError = true;
+                    return;
+                }
+                const relays = relaysInput.value.split(',')
+                    .map(s => parseInt(s.trim()))
+                    .filter(n => !isNaN(n) && n >= 1 && n <= 16)
+                    .map(n => n - 1); // convert to 0-based
+                newRules.push({from: fromVal, to: toVal, relays: relays});
+            });
+            if (hasError) return;
+
+            fetch('/bandrelay/rules', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(newRules)
+            }).then(r => {
+                if (r.ok) {
+                    showToast('✅ Band relay rules saved!', true);
+                    bandRules = newRules;
+                    loadBandRules(); // refresh
+                } else {
+                    return r.text().then(t => showToast('❌ ' + t, false));
+                }
+            }).catch(() => showToast('❌ Network error', false));
+        }
+
+        // Tab switch handler extension for bandrelay
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', function() {
+                const tabName = this.dataset.tab;
+                if (tabName === 'bandrelay') loadBandRules();
+            });
+        });
+
+        // Auto-refresh bandrelay state when tab is active
+        setInterval(() => {
+            const activePanel = document.querySelector('.panel.active');
+            if (activePanel && activePanel.id === 'bandrelay-panel') {
+                fetch('/bandrelay/state')
+                    .then(r => r.json())
+                    .then(data => {
+                        document.getElementById('bandrelay-current-freq').textContent =
+                            data.freq_khz ? data.freq_khz.toFixed(1) : '---';
+                        document.getElementById('bandrelay-current-relays').textContent =
+                            data.active_relays.length ? data.active_relays.map(r => r+1).join(', ') : 'none';
+                    })
+                    .catch(() => {});
             }
         }, 2000);
 
@@ -1805,6 +2078,77 @@ def settings():
     config["group_mode"] = data["mode"]
     save_relay_config()
     return "ok"
+
+
+# ================= BAND RELAY API =================
+
+
+@app.route("/bandrelay/rules")
+def bandrelay_get_rules():
+    if not auth():
+        return jsonify([])
+    return jsonify(band_rules)
+
+
+@app.route("/bandrelay/rules", methods=["POST"])
+def bandrelay_save_rules():
+    if not auth():
+        return "no auth", 403
+    global band_rules
+    data = request.json
+    if not isinstance(data, list):
+        return "Invalid data: expected array", 400
+    # Validate
+    for rule in data:
+        if "from" not in rule or "to" not in rule or "relays" not in rule:
+            return "Invalid rule structure", 400
+        if not isinstance(rule["relays"], list):
+            return "relays must be an array", 400
+        for r in rule["relays"]:
+            if not isinstance(r, int) or r < 0 or r > 15:
+                return f"Invalid relay index: {r}", 400
+    band_rules = data
+    save_band_rules()
+    return "ok"
+
+
+@app.route("/bandrelay/apply")
+def bandrelay_apply():
+    """Manually apply band rules for the current frequency."""
+    if not auth():
+        return "no auth", 403
+    freq = radio_state.get("freq", 0)
+    if freq:
+        relays = set_relays_for_frequency(freq)
+        return jsonify({"relays": relays, "freq_khz": freq / 1000})
+    return jsonify({"relays": [], "freq_khz": 0})
+
+
+@app.route("/bandrelay/toggle", methods=["POST"])
+def bandrelay_toggle():
+    """Enable or disable automatic relay switching."""
+    if not auth():
+        return "no auth", 403
+    global band_relay_enabled
+    data = request.json
+    band_relay_enabled = data.get("enabled", True)
+    print(f"[BAND] Auto relay switching: {'ON' if band_relay_enabled else 'OFF'}")
+    return jsonify({"enabled": band_relay_enabled})
+
+
+@app.route("/bandrelay/state")
+def bandrelay_state():
+    """Return current band relay state."""
+    if not auth():
+        return jsonify({})
+    freq = radio_state.get("freq", 0)
+    active = apply_band_rules(freq) if freq else []
+    return jsonify({
+        "freq_khz": freq / 1000 if freq else 0,
+        "active_relays": active,
+        "rules_count": len(band_rules),
+        "enabled": band_relay_enabled,
+    })
 
 
 @app.route("/trx/state")
@@ -1982,6 +2326,23 @@ def config_restart_services():
         return f"Failed: {e}", 500
 
 
+@app.route("/config/restart_web", methods=["POST"])
+def config_restart_web():
+    """Restart the relay-web systemd service (self-restart)."""
+    if not auth():
+        return "no auth", 403
+    try:
+        # Run restart in background so the HTTP response can be sent first
+        subprocess.Popen(
+            ["sudo", "systemctl", "restart", "relay-web"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return "ok"
+    except Exception as e:
+        return f"Failed: {e}", 500
+
+
 # ================= STATUS API =================
 
 
@@ -2019,6 +2380,7 @@ def start_flask():
 async def main():
     load_relay_config()
     load_trx_config()
+    load_band_rules()
 
     if trx_config.get("enabled", True):
         init_serial()
