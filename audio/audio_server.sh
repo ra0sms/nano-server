@@ -38,12 +38,23 @@ else
     BUFFER_TIME=$DEFAULT_BUFFER_TIME
 fi
 
+# Auto-detect C-Media USB Audio card number
+CARD_NUM=$(grep -E "C-Media|USB Audio" /proc/asound/cards | grep -v webcam | awk '{print $1}')
+if [[ -z "$CARD_NUM" ]]; then
+    # Fallback: first non-webcam, non-audiocodec card
+    CARD_NUM=$(grep -vE "audiocodec|webcam" /proc/asound/cards | grep -v "^$" | head -1 | awk '{print $1}')
+fi
+if [[ -z "$CARD_NUM" ]]; then
+    CARD_NUM=0
+fi
+
 echo "Starting Audio SERVER:"
 echo "  Target IP: $IP_ADDRESS"
 echo "  Sample Rate: $RATE Hz"
 echo "  Buffer Time: $BUFFER_TIME us"
+echo "  ALSA Card: $CARD_NUM ($(grep "^$CARD_NUM" /proc/asound/cards | sed 's/^[[:space:]]*[0-9]*[[:space:]]*//'))"
 
-gst-launch-1.0 alsasrc device=hw:0 buffer-time=$BUFFER_TIME latency-time=1000 ! \
+gst-launch-1.0 alsasrc device=hw:$CARD_NUM buffer-time=$BUFFER_TIME latency-time=1000 ! \
 audioconvert ! audioresample ! \
 capsfilter caps="audio/x-raw,rate=$RATE,channels=1,format=S16LE" ! \
 equalizer-3bands band0=-24 band1=0 band2=0 ! \

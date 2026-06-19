@@ -190,23 +190,148 @@ if not os.path.exists(PROFILES_DIR):
     os.makedirs(PROFILES_DIR)
 
 # Audio ALSA controls — auto-detected
+
+def _find_alsa_card():
+    """Find the C-Media USB Audio Device card identifier.
+    Returns the card ID (e.g., 'Device') or index (e.g., '1') as fallback.
+    """
+    try:
+        with open("/proc/asound/cards", "r") as f:
+            content = f.read()
+        for line in content.splitlines():
+            # Look for "C-Media" USB audio device first
+            if "C-Media" in line:
+                # Line format: " 1 [Device         ]: USB-Audio - ..."
+                m = re.search(r'\[(\w+)\]', line)
+                if m:
+                    card_id = m.group(1)
+                    print(f"[audio] Found C-Media USB Audio card: '{card_id}'")
+                    return card_id
+        # Second pass: any USB Audio device that isn't webcam
+        for line in content.splitlines():
+            if "USB Audio" in line and "webcam" not in line.lower():
+                m = re.search(r'\[(\w+)\]', line)
+                if m:
+                    card_id = m.group(1)
+                    print(f"[audio] Found USB Audio card: '{card_id}'")
+                    return card_id
+    except Exception as e:
+        print(f"[audio] Error reading /proc/asound/cards: {e}")
+
+    # Fallback: try to find any card that isn't audiocodec or webcam
+    try:
+        with open("/proc/asound/cards", "r") as f:
+            content = f.read()
+        for line in content.splitlines():
+            m = re.search(r'\[(\w+)\]', line)
+            if m:
+                card_id = m.group(1)
+                if card_id not in ("audiocodec", "webcam"):
+                    print(f"[audio] Fallback ALSA card: '{card_id}'")
+                    return card_id
+    except Exception:
+        pass
+
+    print("[audio] WARNING: using card 0 as fallback")
+    return "0"
+
+
 def _find_speaker_control():
-    """Find the first 'Speaker' or 'PCM' playback simple control."""
+    """Find the first playback simple control with a percentage value."""
+    # First try: list all simple controls and pick the first playback one
+    try:
+        r = subprocess.run(
+            ["amixer", "-c", ALSA_CARD, "scontrols"],
+            capture_output=True, text=True, timeout=3
+        )
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                m = re.search(r"Simple mixer control '(.+?)'", line)
+                if m:
+                    name = m.group(1)
+                    try:
+                        r2 = subprocess.run(
+                            ["amixer", "-c", ALSA_CARD, "get", name],
+                            capture_output=True, text=True, timeout=3
+                        )
+                        if r2.returncode == 0 and "%" in r2.stdout:
+                            if "Playback" in name or "Speaker" in name or "PCM" in name or "Master" in name or "Headphone" in name:
+                                print(f"[audio] Auto-detected speaker control: '{name}'")
+                                return name
+                    except Exception:
+                        pass
+    except Exception as e:
+        print(f"[audio] scontrols failed: {e}")
+
+    # Second try: fallback to known names
     for name in ["Speaker", "PCM", "Headphone", "Master"]:
         try:
             r = subprocess.run(
-                ["amixer", "-c0", "get", name],
+                ["amixer", "-c", ALSA_CARD, "get", name],
                 capture_output=True, text=True, timeout=3
             )
             if r.returncode == 0 and "%" in r.stdout:
+                print(f"[audio] Fallback: using '{name}'")
                 return name
         except Exception:
             pass
-    return "Speaker"  # fallback
+
+    # Last resort: try to find ANY playback control from contents
+    try:
+        r = subprocess.run(
+            ["amixer", "-c", ALSA_CARD, "contents"],
+            capture_output=True, text=True, timeout=3
+        )
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                m = re.search(r"numid=(\d+),.*name='(.+?)'", line)
+                if m:
+                    numid = m.group(1)
+                    name = m.group(2)
+                    if "Playback" in name or "Speaker" in name or "PCM" in name:
+                        print(f"[audio] Last resort: using numid={numid} ('{name}')")
+                        return f"numid={numid}"
+    except Exception:
+        pass
+
+    print("[audio] WARNING: no speaker control found, falling back to 'Speaker'")
+    return "Speaker"
 
 
+def _find_mic_control():
+    """Auto-detect the microphone capture control numid."""
+    try:
+        r = subprocess.run(
+            ["amixer", "-c", ALSA_CARD, "contents"],
+            capture_output=True, text=True, timeout=3
+        )
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                m = re.search(r"numid=(\d+),.*name='(.+?)'", line)
+                if m:
+                    numid = m.group(1)
+                    name = m.group(2)
+                    if "Capture" in name or "Mic" in name:
+                        try:
+                            r2 = subprocess.run(
+                                ["amixer", "-c", ALSA_CARD, "cget", f"numid={numid}"],
+                                capture_output=True, text=True, timeout=3
+                            )
+                            if r2.returncode == 0 and (": values=" in r2.stdout or "| items" in r2.stdout):
+                                print(f"[audio] Auto-detected mic control: numid={numid} ('{name}')")
+                                return f"numid={numid}"
+                        except Exception:
+                            pass
+    except Exception as e:
+        print(f"[audio] Mic detection failed: {e}")
+
+    print("[audio] WARNING: no mic control found, falling back to numid=8")
+    return "numid=8"
+
+
+ALSA_CARD = _find_alsa_card()
 SPEAKER = _find_speaker_control()
-MIC = "numid=8"
+MIC = _find_mic_control()
 
 
 def get_local_ip():
@@ -286,7 +411,7 @@ def alsa_to_percent(alsa_value):
 def get_mic_value():
     try:
         result = subprocess.run(
-            ["amixer", "-c0", "cget", MIC], capture_output=True, text=True, timeout=5
+            ["amixer", "-c", ALSA_CARD, "cget", MIC], capture_output=True, text=True, timeout=5
         )
         for line in result.stdout.splitlines():
             if line.strip().startswith(": values="):
@@ -300,7 +425,7 @@ def get_mic_value():
 def get_speaker_volume():
     try:
         result = subprocess.run(
-            ["amixer", "-c0", "get", SPEAKER], capture_output=True, text=True, timeout=5
+            ["amixer", "-c", ALSA_CARD, "get", SPEAKER], capture_output=True, text=True, timeout=5
         )
         m = re.search(r"(\d+)%", result.stdout)
         return m.group(1) if m else "50"
@@ -1771,7 +1896,7 @@ def audio_set_speaker():
         return "no auth", 403
     data = request.json
     vol = data.get("volume", 50)
-    subprocess.run(["amixer", "-c0", "set", SPEAKER, f"{vol}%"], timeout=5)
+    subprocess.run(["amixer", "-c", ALSA_CARD, "set", SPEAKER, f"{vol}%"], timeout=5)
     return "ok"
 
 
@@ -1782,7 +1907,7 @@ def audio_set_mic():
     data = request.json
     vol = data.get("volume", 50)
     alsa_value = percent_to_alsa(vol)
-    subprocess.run(["amixer", "-c0", "cset", MIC, str(alsa_value)], timeout=5)
+    subprocess.run(["amixer", "-c", ALSA_CARD, "cset", MIC, str(alsa_value)], timeout=5)
     return "ok"
 
 
