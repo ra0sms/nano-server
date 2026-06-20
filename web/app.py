@@ -1858,10 +1858,10 @@ HTML_TEMPLATE = """
         }
 
         // Tab switch handler extension
-        const origTabHandler = document.querySelector('.tab').click;
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', function() {
                 const tabName = this.dataset.tab;
+                if (tabName === 'main') loadRelays();
                 if (tabName === 'audio') loadAudioState();
                 if (tabName === 'config') loadConfig();
                 if (tabName === 'status') { loadLocalIp(); updateConnectionStatus(); }
@@ -2006,6 +2006,24 @@ HTML_TEMPLATE = """
                             data.freq_khz ? data.freq_khz.toFixed(1) : '---';
                         document.getElementById('bandrelay-current-relays').textContent =
                             data.active_relays.length ? data.active_relays.map(r => r+1).join(', ') : 'none';
+                    })
+                    .catch(() => {});
+            }
+        }, 2000);
+
+        // Auto-refresh relay state on Main tab every 2 seconds
+        setInterval(() => {
+            const activePanel = document.querySelector('.panel.active');
+            if (activePanel && activePanel.id === 'main-panel') {
+                fetch('/state')
+                    .then(r => r.json())
+                    .then(data => {
+                        relayState = data.state;
+                        relayNames = data.names;
+                        relayMode = data.mode;
+                        document.getElementById('mode0_label').textContent = relayMode[0];
+                        document.getElementById('mode1_label').textContent = relayMode[1];
+                        renderRelays();
                     })
                     .catch(() => {});
             }
