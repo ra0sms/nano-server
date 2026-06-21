@@ -348,9 +348,10 @@ def send_char(char: str):
             cw_set(0)
             time.sleep(dit / 1000)
 
-    # Inter-character gap: key up for 2 dit (1 dit already from last space)
+    # Inter-character gap: key up for 3 dit (standard CW timing)
+    # The character always ends with a mark (1), so no trailing space exists
     cw_set(0)
-    time.sleep(dit * 2 / 1000)
+    time.sleep(dit * 3 / 1000)
 
     return True
 
