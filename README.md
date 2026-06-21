@@ -1,6 +1,6 @@
 # Nano Server — Remote Radio Station Server
 
-**Nano Server** is a server-side component of a remote ham radio station system. It runs on a **NanoPi NEO** single-board computer with **Armbian** and provides audio streaming, PTT control via GPIO, video streaming, relay switching, CAT interface forwarding, and a web-based configuration interface.
+**Nano Server** is a server-side component of a remote ham radio station system. It runs on a **NanoPi NEO** single-board computer with **Armbian** and provides audio streaming, PTT control via GPIO, video streaming, relay switching, CAT interface forwarding, CW keying, and a web-based configuration interface.
 
 Desktop client software: https://github.com/ra0sms/caesar-client-desktop
 
@@ -18,6 +18,7 @@ Desktop client software: https://github.com/ra0sms/caesar-client-desktop
 - 🔗 **CAT interface** forwarding over TCP (Icom CI-V and Kenwood protocols)
 - 🔒 **Fail-safe** — PTT is forced OFF when client disconnects
 - 🎛️ **Band Relay Rules** — automatic relay switching based on transceiver frequency
+- 🔑 **CW Keyer** — Winkeyer protocol over UDP, generates Morse code on GPIO PC1
 
 ---
 
@@ -33,6 +34,7 @@ Desktop client software: https://github.com/ra0sms/caesar-client-desktop
 | CAT interface | USB-to-Serial on `/dev/ttyCAT` |
 | CON LED | GPIO PC2 (line 66) |
 | PTT output | GPIO PC3 (line 67) |
+| CW Keyer output | GPIO PC1 (line 65) |
 
 ---
 
@@ -45,6 +47,7 @@ Client PC                          NanoPi NEO (Server)
                     UDP :5000  ──→  Audio RX (client → speaker)
                     UDP :5001  ──→  PTT commands (0/1)
                     UDP :5002  ←→   Ping / RTT monitoring
+                    UDP :5003  ──→  CW Keyer (Winkeyer protocol)
                     TCP :5050  ←──  Web UI (Flask): relays, TRX, audio, config, status, band relay
                     TCP :8081  ←──  MJPEG video stream
                     TCP :3001  ←──  CAT (Icom CI-V or Kenwood)
@@ -54,7 +57,7 @@ Client PC                          NanoPi NEO (Server)
 
 | Service | Description |
 |---|---|
-| `ptt_server` | PTT GPIO control + client monitor + ping responder |
+| `ptt_server` | PTT + CW Keyer + client monitor + ping responder (single service, all GPIO) |
 | `audio_server` | GStreamer audio TX (server mic → client) |
 | `audio_client_on_server` | GStreamer audio RX (client → server speaker) |
 | `relay-web` | Web UI: relays, TRX, audio, config, status, band relay (port 5050) |
@@ -227,6 +230,77 @@ The web panel auto-detects the ALSA card (looks for C-Media USB Audio in `/proc/
 
 ---
 
+## CW Keyer (Winkeyer Protocol)
+
+The CW Keyer is integrated into the **`ptt_server`** service (single process, single GPIO request). It implements the **K1EL Winkeyer protocol** over UDP, generating Morse code (CW) on **GPIO PC1** (line 65).
+
+All GPIO lines (CW=PC1, CON=PC2, PTT=PC3) are requested in a single `gpiod.request_lines()` call to avoid conflicts between separate processes on the same gpiochip.
+
+### How it works
+
+1. The client sends Winkeyer protocol commands via UDP to port **5003**
+2. The server buffers ASCII characters and sends them as CW on GPIO PC1
+3. The output pin (PC1) drives a transistor/keying circuit connected to the transceiver
+
+### Supported commands
+
+| Byte | Command | Description |
+|---|---|---|
+| `0x00` + WPM | Set speed | WPM value (5-99) |
+| `0x02` | Start sending | Begin transmitting buffer |
+| `0x03` | Clear buffer | Reset and stop |
+| `0x0A` (LF) | Start sending | Same as 0x02 |
+| `0x1B` | Immediate stop | Abort transmission |
+| `0x1F` | Request status | Reply: 0x00 (idle) or 0x01 (busy) |
+| `0x20`-`0x7E` | ASCII chars | Add to send buffer |
+| `0x7F` | Backspace | Remove last char from buffer |
+
+### Usage
+
+```bash
+# Send "CQ CQ DE RA0SMS" at 25 WPM
+echo -ne '\x00\x19CQ CQ DE RA0SMS\x0a' | nc -u <server-ip> 5003
+```
+
+### XML-RPC interface (PyWinKeyerSerial / not1mm compatible)
+
+The service provides an **XML-RPC server on port 6789**, compatible with the [K6GTE PyWinKeyerSerial](https://github.com/mbridak/PyWinKeyerSerial) interface. This allows logging programs like **[not1mm](https://github.com/mbridak/not1mm)** to send CW directly to the server.
+
+In not1mm, configure:
+- **Settings → CW Interface → Type**: `PyWinKeyerSerial`
+- **Settings → CW Interface → IP**: `<server-ip>`
+- **Settings → CW Interface → Port**: `6789`
+
+Available RPC methods:
+
+| Method | Description |
+|---|---|
+| `k1elsendstring(text)` | Send a string to the CW buffer and start transmitting |
+| `setspeed(wpm)` | Set CW speed (5-99 WPM) |
+| `sendblended(text)` | Send a prosign/blended message |
+| `tuneon()` | Key down and hold (tune mode) |
+| `tuneoff()` | Stop key down |
+| `clearbuffer()` | Clear the CW buffer and stop sending |
+
+Example using Python:
+
+```python
+import xmlrpc.client
+proxy = xmlrpc.client.ServerProxy("http://<server-ip>:6789/RPC2")
+proxy.k1elsendstring("CQ CQ DE RA0SMS")
+proxy.setspeed(25)
+```
+
+### Service management
+
+```bash
+sudo systemctl status ptt_server.service
+sudo systemctl restart ptt_server.service
+sudo journalctl -u ptt_server.service -f
+```
+
+---
+
 ## Project Structure
 
 ```
@@ -246,7 +320,7 @@ nano-server/
 │   ├── audio_client_on_server.sh  # GStreamer RX pipeline
 │   └── audio_config.cfg           # Rate and buffer settings
 ├── network/
-│   └── combined_ptt_service.py    # PTT + ping monitor + ping responder
+│   └── combined_ptt_service.py    # PTT + CW Keyer + client monitor + ping responder
 ├── web/
 │   ├── app.py                     # Web UI: relays, TRX, audio, config, status, band relay
 │   ├── config.json                # Relay names and group modes
