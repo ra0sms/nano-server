@@ -173,6 +173,12 @@ Auto-switching can be toggled on/off via a checkbox in the Band Relay tab.
 
 ![WEB3](pics/nano-server-web-3.png)
 
+![WEB4](pics/nano-server-web-4.png)
+
+![WEB5](pics/nano-server-web-5.png)
+
+![WEB6](pics/nano-server-web-6.png)
+
 ---
 
 ## Profiles
