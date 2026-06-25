@@ -1339,12 +1339,10 @@ HTML_TEMPLATE = """
             <!-- Mode Selection -->
             <div style="margin: 15px 0;">
                 <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
+                    <button class="mode-btn" onclick="setMode('CW')">CW</button>
                     <button class="mode-btn" onclick="setMode('LSB')">LSB</button>
                     <button class="mode-btn" onclick="setMode('USB')">USB</button>
                     <button class="mode-btn" onclick="setMode('AM')">AM</button>
-                    <button class="mode-btn" onclick="setMode('CW')">CW</button>
-                    <button class="mode-btn" onclick="setMode('RTTY')">RTTY</button>
-                    <button class="mode-btn" onclick="setMode('FM')">FM</button>
                 </div>
             </div>
 
@@ -2458,13 +2456,13 @@ AMATEUR_BANDS = [
 ]
 
 # Mode definitions for Icom CI-V
+# Command 0x1A 0x06: mode set (works on IC-706, IC-7000, IC-7300, IC-705 etc.)
+# Data byte: 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW, 0x04=RTTY, 0x05=FM
 ICOM_MODES = {
     "LSB": 0x00,
     "USB": 0x01,
     "AM": 0x02,
     "CW": 0x03,
-    "RTTY": 0x04,
-    "FM": 0x05,
 }
 
 # Mode definitions for Kenwood
@@ -2544,20 +2542,17 @@ def trx_set_mode():
         return "no auth", 403
     data = request.json
     mode = data.get("mode", "USB")
-    if mode not in ("LSB", "USB", "AM", "CW", "RTTY", "FM"):
+    if mode not in ("CW", "LSB", "USB", "AM"):
         return f"Invalid mode: {mode}", 400
 
     if _is_kenwood():
         md_val = KENWOOD_MODES.get(mode, "2")
         _send_kenwood_cmd(f"MD{md_val};")
     else:
-        # Icom CI-V: set mode command 0x07
-        # Format: 0x07 + mode_byte + 0x00 (filter byte, 0x00 = auto)
-        # Mode bytes: 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW, 0x04=RTTY, 0x05=FM
+        # Icom CI-V: set mode using 0x1A 0x06 command
+        # Format: 0x1A + 0x06 + mode_byte
+        # Mode bytes: 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW
         mode_byte = ICOM_MODES.get(mode, 0x01)
-        # Send primary command (0x07) - works on IC-7300, IC-705, IC-7610 etc.
-        _send_civ_cmd(bytes([0x07, mode_byte, 0x00]))
-        # Also send alternate command (0x1A 0x06) for older models (IC-706, IC-7000 etc.)
         _send_civ_cmd(bytes([0x1A, 0x06, mode_byte]))
 
     radio_state["mode"] = mode
