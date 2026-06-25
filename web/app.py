@@ -68,6 +68,8 @@ radio_state = {
     "online": False,
     "last_rx": 0,
     "mode": "Unknown",
+    "power": 50,
+    "af_gain": 50,
 }
 
 # Serial and async components
@@ -1667,6 +1669,17 @@ HTML_TEMPLATE = """
                     bandDiv.textContent = 'Band: ' + data.band;
                     modeDiv.textContent = 'Mode: ' + data.mode;
 
+                    // Update power slider
+                    if (data.power !== undefined) {
+                        document.getElementById('trx-power-slider').value = data.power;
+                        document.getElementById('trx-power-val').textContent = data.power + '%';
+                    }
+                    // Update AF gain slider
+                    if (data.af_gain !== undefined) {
+                        document.getElementById('trx-af-slider').value = data.af_gain;
+                        document.getElementById('trx-af-val').textContent = data.af_gain + '%';
+                    }
+
                     // Highlight active mode button
                     document.querySelectorAll('.mode-btn').forEach(btn => {
                         btn.classList.remove('active');
@@ -2409,6 +2422,8 @@ def trx_state():
             "online": radio_state["online"],
             "mode": radio_state["mode"],
             "last_rx": radio_state["last_rx"],
+            "power": radio_state.get("power", 50),
+            "af_gain": radio_state.get("af_gain", 50),
         }
     )
 
@@ -2455,14 +2470,15 @@ AMATEUR_BANDS = [
     (50000000, 54000000, "6m"),
 ]
 
-# Mode definitions for Icom CI-V (Xiegu G90 compatible)
+# Mode definitions for Xiegu G90 CI-V
 # G90 uses command 0x07 with 5 data bytes: 00 00 00 00 <mode_byte>
-# Mode bytes: 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW
+# G90 mode bytes (different from standard Icom!):
+#   0x01=LSB, 0x02=USB, 0x03=AM, 0x04=CW
 ICOM_MODES = {
-    "LSB": 0x00,
-    "USB": 0x01,
-    "AM": 0x02,
-    "CW": 0x03,
+    "LSB": 0x01,
+    "USB": 0x02,
+    "AM": 0x03,
+    "CW": 0x04,
 }
 
 # Mode definitions for Kenwood
@@ -2552,11 +2568,11 @@ def trx_set_mode():
         md_val = KENWOOD_MODES.get(mode, "2")
         _send_kenwood_cmd(f"MD{md_val};")
     else:
-        # Xiegu G90 / Icom CI-V: set mode using 0x07 command
-        # G90 format: 0x07 + mode_byte
-        # Mode bytes: 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW
-        mode_byte = ICOM_MODES.get(mode, 0x01)
-        _send_civ_cmd(bytes([0x07, mode_byte]))
+        # Xiegu G90 CI-V: set mode using 0x07 command
+        # G90 format: 0x07 + 00 00 00 00 + mode_byte (5 data bytes)
+        # Mode bytes: 0x01=LSB, 0x02=USB, 0x03=AM, 0x04=CW
+        mode_byte = ICOM_MODES.get(mode, 0x02)
+        _send_civ_cmd(bytes([0x07, 0x00, 0x00, 0x00, 0x00, mode_byte]))
 
     radio_state["mode"] = mode
     return jsonify({"mode": mode})
