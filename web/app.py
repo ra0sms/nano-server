@@ -2455,9 +2455,9 @@ AMATEUR_BANDS = [
     (50000000, 54000000, "6m"),
 ]
 
-# Mode definitions for Icom CI-V
-# Command 0x1A 0x06: mode set (works on IC-706, IC-7000, IC-7300, IC-705 etc.)
-# Data byte: 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW, 0x04=RTTY, 0x05=FM
+# Mode definitions for Icom CI-V (Xiegu G90 compatible)
+# G90 uses command 0x07 with 5 data bytes: 00 00 00 00 <mode_byte>
+# Mode bytes: 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW
 ICOM_MODES = {
     "LSB": 0x00,
     "USB": 0x01,
@@ -2477,11 +2477,14 @@ KENWOOD_MODES = {
 
 
 def _send_civ_cmd(payload: bytes):
-    """Send a CI-V command frame and return True if sent successfully."""
+    """Send a CI-V command frame and return True if sent successfully.
+    Frame format: FE FE <to_addr> <from_addr> <cmd_data> FD
+    For Xiegu G90: to_addr=radio_addr(0xE0), from_addr=ctrl_addr(0xE0)
+    """
     if not ser or not ser.is_open:
         return False
     try:
-        frame = bytes([0xFE, 0xFE, trx_config["ctrl_addr"], trx_config["radio_addr"]]) + payload + bytes([0xFD])
+        frame = bytes([0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"]]) + payload + bytes([0xFD])
         ser.write(frame)
         return True
     except Exception as e:
@@ -2549,11 +2552,11 @@ def trx_set_mode():
         md_val = KENWOOD_MODES.get(mode, "2")
         _send_kenwood_cmd(f"MD{md_val};")
     else:
-        # Icom CI-V: set mode using 0x1A 0x06 command
-        # Format: 0x1A + 0x06 + mode_byte
+        # Xiegu G90 / Icom CI-V: set mode using 0x07 command
+        # G90 format: 0x07 + mode_byte
         # Mode bytes: 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW
         mode_byte = ICOM_MODES.get(mode, 0x01)
-        _send_civ_cmd(bytes([0x1A, 0x06, mode_byte]))
+        _send_civ_cmd(bytes([0x07, mode_byte]))
 
     radio_state["mode"] = mode
     return jsonify({"mode": mode})
