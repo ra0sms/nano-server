@@ -2471,14 +2471,13 @@ AMATEUR_BANDS = [
 ]
 
 # Mode definitions for Xiegu G90 CI-V
-# G90 uses command 0x07 with 5 data bytes: 00 00 00 00 <mode_byte>
-# G90 mode bytes (different from standard Icom!):
-#   0x01=LSB, 0x02=USB, 0x03=AM, 0x04=CW
+# G90 uses command 0x07 with mode_byte
+# Mode bytes (same as response from radio): 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW
 ICOM_MODES = {
-    "LSB": 0x01,
-    "USB": 0x02,
-    "AM": 0x03,
-    "CW": 0x04,
+    "LSB": 0x00,
+    "USB": 0x01,
+    "AM": 0x02,
+    "CW": 0x03,
 }
 
 # Mode definitions for Kenwood
@@ -2492,15 +2491,18 @@ KENWOOD_MODES = {
 }
 
 
-def _send_civ_cmd(payload: bytes):
+def _send_civ_cmd(payload: bytes, to_addr=None):
     """Send a CI-V command frame and return True if sent successfully.
     Frame format: FE FE <to_addr> <from_addr> <cmd_data> FD
-    For Xiegu G90: to_addr=radio_addr(0xE0), from_addr=ctrl_addr(0xE0)
+    For Xiegu G90: to_addr=radio_addr, from_addr=ctrl_addr
+    If to_addr is None, uses radio_addr from config.
     """
     if not ser or not ser.is_open:
         return False
     try:
-        frame = bytes([0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"]]) + payload + bytes([0xFD])
+        if to_addr is None:
+            to_addr = trx_config["radio_addr"]
+        frame = bytes([0xFE, 0xFE, to_addr, trx_config["ctrl_addr"]]) + payload + bytes([0xFD])
         ser.write(frame)
         return True
     except Exception as e:
@@ -2547,7 +2549,11 @@ def trx_set_freq():
             high = temp % 10
             temp //= 10
             bcd[i] = (high << 4) | low
-        _send_civ_cmd(bytes([0x05]) + bytes(bcd))
+        cmd = bytes([0x05]) + bytes(bcd)
+        _send_civ_cmd(cmd)
+        # Also try 0xE0 for G90
+        if trx_config.get("radio_addr", 0x70) != 0xE0:
+            _send_civ_cmd(cmd, to_addr=0xE0)
 
     radio_state["freq"] = freq_hz
     radio_state["band"] = freq_to_band(freq_hz)
@@ -2569,10 +2575,15 @@ def trx_set_mode():
         _send_kenwood_cmd(f"MD{md_val};")
     else:
         # Xiegu G90 CI-V: set mode using 0x07 command
-        # G90 format: 0x07 + 00 00 00 00 + mode_byte (5 data bytes)
-        # Mode bytes: 0x01=LSB, 0x02=USB, 0x03=AM, 0x04=CW
-        mode_byte = ICOM_MODES.get(mode, 0x02)
-        _send_civ_cmd(bytes([0x07, 0x00, 0x00, 0x00, 0x00, mode_byte]))
+        # G90 format: 0x07 + mode_byte
+        # Mode bytes: 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW
+        mode_byte = ICOM_MODES.get(mode, 0x01)
+        cmd = bytes([0x07, mode_byte])
+        # Send to configured address
+        _send_civ_cmd(cmd)
+        # Also try common G90 addresses (0xE0) in case radio_addr differs
+        if trx_config.get("radio_addr", 0x70) != 0xE0:
+            _send_civ_cmd(cmd, to_addr=0xE0)
 
     radio_state["mode"] = mode
     return jsonify({"mode": mode})
@@ -2605,7 +2616,11 @@ def trx_freq_step():
             high = temp % 10
             temp //= 10
             bcd[i] = (high << 4) | low
-        _send_civ_cmd(bytes([0x05]) + bytes(bcd))
+        cmd = bytes([0x05]) + bytes(bcd)
+        _send_civ_cmd(cmd)
+        # Also try 0xE0 for G90
+        if trx_config.get("radio_addr", 0x70) != 0xE0:
+            _send_civ_cmd(cmd, to_addr=0xE0)
 
     radio_state["freq"] = new_freq
     radio_state["band"] = freq_to_band(new_freq)
@@ -2636,7 +2651,11 @@ def trx_set_band():
                     high = temp % 10
                     temp //= 10
                     bcd[i] = (high << 4) | low
-                _send_civ_cmd(bytes([0x05]) + bytes(bcd))
+                cmd = bytes([0x05]) + bytes(bcd)
+                _send_civ_cmd(cmd)
+                # Also try 0xE0 for G90
+                if trx_config.get("radio_addr", 0x70) != 0xE0:
+                    _send_civ_cmd(cmd, to_addr=0xE0)
 
             radio_state["freq"] = center
             radio_state["band"] = band_name
@@ -2661,8 +2680,13 @@ def trx_set_power():
         # Icom CI-V: power setting command 0x14
         # Value 0-255 maps to 0-100%
         pwr_byte = max(0, min(255, int(power * 255 / 100)))
-        _send_civ_cmd(bytes([0x14, pwr_byte]))
+        cmd = bytes([0x14, pwr_byte])
+        _send_civ_cmd(cmd)
+        # Also try 0xE0 for G90
+        if trx_config.get("radio_addr", 0x70) != 0xE0:
+            _send_civ_cmd(cmd, to_addr=0xE0)
 
+    radio_state["power"] = power
     return jsonify({"power": power})
 
 
@@ -2681,8 +2705,13 @@ def trx_set_af_gain():
     else:
         # Icom CI-V: AF gain command 0x14 with sub-command 0x01
         gain_byte = max(0, min(255, int(gain * 255 / 100)))
-        _send_civ_cmd(bytes([0x14, 0x01, gain_byte]))
+        cmd = bytes([0x14, 0x01, gain_byte])
+        _send_civ_cmd(cmd)
+        # Also try 0xE0 for G90
+        if trx_config.get("radio_addr", 0x70) != 0xE0:
+            _send_civ_cmd(cmd, to_addr=0xE0)
 
+    radio_state["af_gain"] = gain
     return jsonify({"af_gain": gain})
 
 
