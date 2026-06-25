@@ -2387,8 +2387,8 @@ AMATEUR_BANDS = [
 ]
 
 # Mode definitions for Xiegu G90 CI-V
-# G90 uses command 0x07 with mode_byte
-# Mode bytes (same as response from radio): 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW
+# G90 uses command 0x06 to set mode for current VFO
+# 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW
 ICOM_MODES = {
     "LSB": 0x00,
     "USB": 0x01,
@@ -2490,26 +2490,10 @@ def trx_set_mode():
         md_val = KENWOOD_MODES.get(mode, "2")
         _send_kenwood_cmd(f"MD{md_val};")
     else:
-        # Xiegu G90 CI-V: try multiple command formats for mode setting
+        # Xiegu G90 CI-V: set mode using 0x06 command (sets mode for current VFO)
+        # 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW
         mode_byte = ICOM_MODES.get(mode, 0x01)
-
-        # Format 1: 0x07 + mode_byte (standard Icom)
-        cmd1 = bytes([0x07, mode_byte])
-        _send_civ_cmd(cmd1)
-
-        # Format 2: 0x07 + 00 00 00 00 + mode_byte (Icom with filter bytes)
-        cmd2 = bytes([0x07, 0x00, 0x00, 0x00, 0x00, mode_byte])
-        _send_civ_cmd(cmd2)
-
-        # Format 3: 0x1A 0x06 + mode_byte (alternate Icom command)
-        cmd3 = bytes([0x1A, 0x06, mode_byte])
-        _send_civ_cmd(cmd3)
-
-        # Also try all formats on address 0xE0 (G90 default)
-        if trx_config.get("radio_addr", 0x70) != 0xE0:
-            _send_civ_cmd(cmd1, to_addr=0xE0)
-            _send_civ_cmd(cmd2, to_addr=0xE0)
-            _send_civ_cmd(cmd3, to_addr=0xE0)
+        _send_civ_cmd(bytes([0x06, mode_byte]))
 
     radio_state["mode"] = mode
     return jsonify({"mode": mode})
