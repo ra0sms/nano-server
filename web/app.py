@@ -2414,11 +2414,13 @@ def _send_civ_cmd(payload: bytes, to_addr=None):
     If to_addr is None, uses radio_addr from config.
     """
     if not ser or not ser.is_open:
+        print(f"[TRX] CIV send failed: ser={ser is not None}, is_open={ser.is_open if ser else False}")
         return False
     try:
         if to_addr is None:
             to_addr = trx_config["radio_addr"]
         frame = bytes([0xFE, 0xFE, to_addr, trx_config["ctrl_addr"]]) + payload + bytes([0xFD])
+        print(f"[TRX] CIV send: {frame.hex()}")
         ser.write(frame)
         return True
     except Exception as e:
