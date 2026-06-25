@@ -31,6 +31,7 @@ echo "SUBSYSTEM==\"tty\", ENV{ID_PATH}==\"$ID_PATH_USB0\", SYMLINK+=\"ttyCAT\"" 
 udevadm control --reload-rules
 udevadm trigger
 
+
 echo "udev rules added:"
 echo "- /dev/ttyUSB0 → /dev/ttyCAT (ID_PATH: $ID_PATH_USB0)"
 echo "Reboot for connection"

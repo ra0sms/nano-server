@@ -1198,6 +1198,63 @@ HTML_TEMPLATE = """
             border-radius: 6px;
             height: 12px;
         }
+        .freq-step-btn {
+            padding: 8px 12px;
+            border: none;
+            border-radius: 6px;
+            color: white;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.15s;
+        }
+        .freq-step-btn:hover {
+            transform: scale(1.05);
+            filter: brightness(1.2);
+        }
+        .freq-step-btn:active {
+            transform: scale(0.95);
+        }
+        .band-btn {
+            padding: 8px 14px;
+            border: 2px solid #2d6cdf;
+            border-radius: 6px;
+            background: transparent;
+            color: #2d6cdf;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.15s;
+        }
+        .band-btn:hover {
+            background: #2d6cdf;
+            color: white;
+        }
+        .band-btn:active {
+            transform: scale(0.95);
+        }
+        .mode-btn {
+            padding: 8px 16px;
+            border: 2px solid #e67e22;
+            border-radius: 6px;
+            background: transparent;
+            color: #e67e22;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.15s;
+        }
+        .mode-btn:hover {
+            background: #e67e22;
+            color: white;
+        }
+        .mode-btn.active {
+            background: #e67e22;
+            color: white;
+        }
+        .mode-btn:active {
+            transform: scale(0.95);
+        }
     </style>
 </head>
 <body>
@@ -1240,6 +1297,73 @@ HTML_TEMPLATE = """
             <div class="freq-display" id="trx-freq">---.--- MHz</div>
             <div id="trx-band">Band: ---</div>
             <div id="trx-mode">Mode: ---</div>
+
+            <!-- Frequency Step Controls -->
+            <div style="margin: 15px 0;">
+                <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
+                    <button class="freq-step-btn" onclick="freqStep(-10000000)" style="background:#8e44ad;">-10 MHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(-1000000)" style="background:#8e44ad;">-1 MHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(-100000)" style="background:#2980b9;">-100 kHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(-10000)" style="background:#2980b9;">-10 kHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(-1000)" style="background:#2980b9;">-1 kHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(1000)" style="background:#e67e22;">+1 kHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(10000)" style="background:#e67e22;">+10 kHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(100000)" style="background:#e67e22;">+100 kHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(1000000)" style="background:#27ae60;">+1 MHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(10000000)" style="background:#27ae60;">+10 MHz</button>
+                </div>
+            </div>
+
+            <!-- Manual Frequency Input -->
+            <div style="margin: 15px 0; display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap;">
+                <input type="number" id="trx-freq-input" placeholder="Frequency (Hz)" style="width: 200px; padding: 10px; font-size: 16px; background: #2a2d34; color: white; border: 1px solid #444; border-radius: 6px;">
+                <button class="save-btn" onclick="setFreqFromInput()">Set Freq</button>
+            </div>
+
+            <!-- Band Selection -->
+            <div style="margin: 15px 0;">
+                <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
+                    <button class="band-btn" onclick="setBand('160m')">160m</button>
+                    <button class="band-btn" onclick="setBand('80m')">80m</button>
+                    <button class="band-btn" onclick="setBand('40m')">40m</button>
+                    <button class="band-btn" onclick="setBand('30m')">30m</button>
+                    <button class="band-btn" onclick="setBand('20m')">20m</button>
+                    <button class="band-btn" onclick="setBand('17m')">17m</button>
+                    <button class="band-btn" onclick="setBand('15m')">15m</button>
+                    <button class="band-btn" onclick="setBand('12m')">12m</button>
+                    <button class="band-btn" onclick="setBand('10m')">10m</button>
+                    <button class="band-btn" onclick="setBand('6m')">6m</button>
+                </div>
+            </div>
+
+            <!-- Mode Selection -->
+            <div style="margin: 15px 0;">
+                <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
+                    <button class="mode-btn" onclick="setMode('LSB')">LSB</button>
+                    <button class="mode-btn" onclick="setMode('USB')">USB</button>
+                    <button class="mode-btn" onclick="setMode('AM')">AM</button>
+                    <button class="mode-btn" onclick="setMode('CW')">CW</button>
+                    <button class="mode-btn" onclick="setMode('RTTY')">RTTY</button>
+                    <button class="mode-btn" onclick="setMode('FM')">FM</button>
+                </div>
+            </div>
+
+            <!-- Power & AF Gain Sliders -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 15px 0;">
+                <div style="background: #2a2d34; padding: 15px; border-radius: 8px;">
+                    <label style="display: block; margin-bottom: 8px; font-weight: bold;">Output Power</label>
+                    <input type="range" id="trx-power-slider" min="0" max="100" value="50" class="audio-slider" oninput="document.getElementById('trx-power-val').textContent = this.value + '%'">
+                    <div class="value-display" id="trx-power-val" style="font-size: 16px; margin-top: 8px;">50%</div>
+                    <button class="save-btn" onclick="setPower()" style="margin-top: 8px; width: 100%;">Set Power</button>
+                </div>
+                <div style="background: #2a2d34; padding: 15px; border-radius: 8px;">
+                    <label style="display: block; margin-bottom: 8px; font-weight: bold;">AF Gain</label>
+                    <input type="range" id="trx-af-slider" min="0" max="100" value="50" class="audio-slider" oninput="document.getElementById('trx-af-val').textContent = this.value + '%'">
+                    <div class="value-display" id="trx-af-val" style="font-size: 16px; margin-top: 8px;">50%</div>
+                    <button class="save-btn" onclick="setAfGain()" style="margin-top: 8px; width: 100%;">Set AF Gain</button>
+                </div>
+            </div>
+
             <button class="refresh-btn" onclick="loadTrxState()">Refresh</button>
         </div>
     </div>
@@ -1544,10 +1668,116 @@ HTML_TEMPLATE = """
                     }
                     bandDiv.textContent = 'Band: ' + data.band;
                     modeDiv.textContent = 'Mode: ' + data.mode;
+
+                    // Highlight active mode button
+                    document.querySelectorAll('.mode-btn').forEach(btn => {
+                        btn.classList.remove('active');
+                        if (btn.textContent === data.mode) {
+                            btn.classList.add('active');
+                        }
+                    });
                 })
                 .catch(() => {
                     document.getElementById('trx-status').innerHTML = '🔴 OFFLINE';
                 });
+        }
+
+        // TRX Control Functions
+        function freqStep(step) {
+            fetch('/trx/freq_step', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({step: step})
+            })
+            .then(r => r.json())
+            .then(data => {
+                const stepLabel = step >= 0 ? '+' + step : '' + step;
+                showToast('📡 Freq: ' + (data.freq / 1000000).toFixed(6) + ' MHz (' + stepLabel + ' Hz)', true);
+                loadTrxState();
+            })
+            .catch(() => showToast('❌ Failed to change frequency', false));
+        }
+
+        function setFreqFromInput() {
+            const input = document.getElementById('trx-freq-input');
+            const freq = parseInt(input.value);
+            if (!freq || freq < 100000 || freq > 3000000000) {
+                showToast('❌ Invalid frequency (100000 - 3000000000 Hz)', false);
+                return;
+            }
+            fetch('/trx/set_freq', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({freq: freq})
+            })
+            .then(r => r.json())
+            .then(data => {
+                showToast('📡 Freq set to ' + (data.freq / 1000000).toFixed(6) + ' MHz', true);
+                loadTrxState();
+            })
+            .catch(() => showToast('❌ Failed to set frequency', false));
+        }
+
+        function setBand(band) {
+            fetch('/trx/set_band', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({band: band})
+            })
+            .then(r => {
+                if (!r.ok) throw new Error('Band not found');
+                return r.json();
+            })
+            .then(data => {
+                showToast('📡 Switched to ' + data.band + ' (' + (data.freq / 1000000).toFixed(6) + ' MHz)', true);
+                loadTrxState();
+            })
+            .catch(() => showToast('❌ Failed to switch band', false));
+        }
+
+        function setMode(mode) {
+            fetch('/trx/set_mode', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({mode: mode})
+            })
+            .then(r => {
+                if (!r.ok) throw new Error('Invalid mode');
+                return r.json();
+            })
+            .then(data => {
+                showToast('📻 Mode: ' + data.mode, true);
+                loadTrxState();
+            })
+            .catch(() => showToast('❌ Failed to set mode', false));
+        }
+
+        function setPower() {
+            const val = document.getElementById('trx-power-slider').value;
+            fetch('/trx/set_power', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({power: parseInt(val)})
+            })
+            .then(r => {
+                if (r.ok) showToast('🔋 Power set to ' + val + '%', true);
+                else showToast('❌ Failed to set power', false);
+            })
+            .catch(() => showToast('❌ Network error', false));
+        }
+
+        function setAfGain() {
+            const val = document.getElementById('trx-af-slider').value;
+            fetch('/trx/set_af_gain', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({gain: parseInt(val)})
+            })
+            .then(r => {
+                if (r.ok) showToast('🔊 AF gain set to ' + val + '%', true);
+                else showToast('❌ Failed to set AF gain', false);
+            })
+            .catch(() => showToast('❌ Network error', false));
         }
 
         function loadTrxConfig() {
@@ -2209,6 +2439,231 @@ def trx_config_route():
         init_serial()
 
     return "ok"
+
+
+# ================= TRX CONTROL API =================
+
+# Amateur band definitions (Hz)
+AMATEUR_BANDS = [
+    (1800000, 2000000, "160m"),
+    (3500000, 3800000, "80m"),
+    (7000000, 7200000, "40m"),
+    (10100000, 10150000, "30m"),
+    (14000000, 14350000, "20m"),
+    (18068000, 18168000, "17m"),
+    (21000000, 21450000, "15m"),
+    (24890000, 24990000, "12m"),
+    (28000000, 29700000, "10m"),
+    (50000000, 54000000, "6m"),
+]
+
+# Mode definitions for Icom CI-V
+ICOM_MODES = {
+    "LSB": 0x00,
+    "USB": 0x01,
+    "AM": 0x02,
+    "CW": 0x03,
+    "RTTY": 0x04,
+    "FM": 0x05,
+}
+
+# Mode definitions for Kenwood
+KENWOOD_MODES = {
+    "LSB": "1",
+    "USB": "2",
+    "CW": "3",
+    "FM": "4",
+    "AM": "5",
+    "RTTY": "6",
+}
+
+
+def _send_civ_cmd(payload: bytes):
+    """Send a CI-V command frame and return True if sent successfully."""
+    if not ser or not ser.is_open:
+        return False
+    try:
+        frame = bytes([0xFE, 0xFE, trx_config["ctrl_addr"], trx_config["radio_addr"]]) + payload + bytes([0xFD])
+        ser.write(frame)
+        return True
+    except Exception as e:
+        print(f"[TRX] CIV send error: {e}")
+        return False
+
+
+def _send_kenwood_cmd(cmd: str):
+    """Send a Kenwood CAT command string."""
+    if not ser or not ser.is_open:
+        return False
+    try:
+        ser.write(cmd.encode("ascii"))
+        return True
+    except Exception as e:
+        print(f"[TRX] Kenwood send error: {e}")
+        return False
+
+
+def _is_kenwood():
+    return trx_config.get("protocol", "Icom") == "Kenwood"
+
+
+@app.route("/trx/set_freq", methods=["POST"])
+def trx_set_freq():
+    """Set transceiver frequency (Hz)."""
+    if not auth():
+        return "no auth", 403
+    data = request.json
+    freq_hz = data.get("freq", 0)
+    if freq_hz < 100000 or freq_hz > 3000000000:
+        return "Invalid frequency", 400
+
+    if _is_kenwood():
+        cmd = f"FA{freq_hz:011d};"
+        _send_kenwood_cmd(cmd)
+    else:
+        # Icom CI-V: set frequency command 0x05
+        bcd = bytearray(5)
+        temp = freq_hz
+        for i in range(5):
+            low = temp % 10
+            temp //= 10
+            high = temp % 10
+            temp //= 10
+            bcd[i] = (high << 4) | low
+        _send_civ_cmd(bytes([0x05]) + bytes(bcd))
+
+    radio_state["freq"] = freq_hz
+    radio_state["band"] = freq_to_band(freq_hz)
+    return jsonify({"freq": freq_hz, "band": radio_state["band"]})
+
+
+@app.route("/trx/set_mode", methods=["POST"])
+def trx_set_mode():
+    """Set transceiver mode."""
+    if not auth():
+        return "no auth", 403
+    data = request.json
+    mode = data.get("mode", "USB")
+    if mode not in ("LSB", "USB", "AM", "CW", "RTTY", "FM"):
+        return f"Invalid mode: {mode}", 400
+
+    if _is_kenwood():
+        md_val = KENWOOD_MODES.get(mode, "2")
+        _send_kenwood_cmd(f"MD{md_val};")
+    else:
+        mode_byte = ICOM_MODES.get(mode, 0x01)
+        _send_civ_cmd(bytes([0x06, mode_byte]))
+
+    radio_state["mode"] = mode
+    return jsonify({"mode": mode})
+
+
+@app.route("/trx/freq_step", methods=["POST"])
+def trx_freq_step():
+    """Change frequency by a step in Hz (positive or negative)."""
+    if not auth():
+        return "no auth", 403
+    data = request.json
+    step = data.get("step", 0)
+    current_freq = radio_state.get("freq", 0)
+    if current_freq == 0:
+        current_freq = 7100000  # default to 40m if unknown
+    new_freq = current_freq + step
+    # Clamp to valid range
+    new_freq = max(100000, min(3000000000, new_freq))
+
+    # Send the new frequency to the radio
+    if _is_kenwood():
+        cmd = f"FA{new_freq:011d};"
+        _send_kenwood_cmd(cmd)
+    else:
+        bcd = bytearray(5)
+        temp = new_freq
+        for i in range(5):
+            low = temp % 10
+            temp //= 10
+            high = temp % 10
+            temp //= 10
+            bcd[i] = (high << 4) | low
+        _send_civ_cmd(bytes([0x05]) + bytes(bcd))
+
+    radio_state["freq"] = new_freq
+    radio_state["band"] = freq_to_band(new_freq)
+    return jsonify({"freq": new_freq, "band": radio_state["band"]})
+
+
+@app.route("/trx/set_band", methods=["POST"])
+def trx_set_band():
+    """Set frequency to the center of an amateur band."""
+    if not auth():
+        return "no auth", 403
+    data = request.json
+    band_name = data.get("band", "")
+
+    for start, end, name in AMATEUR_BANDS:
+        if name == band_name:
+            center = (start + end) // 2
+            # Send frequency
+            if _is_kenwood():
+                cmd = f"FA{center:011d};"
+                _send_kenwood_cmd(cmd)
+            else:
+                bcd = bytearray(5)
+                temp = center
+                for i in range(5):
+                    low = temp % 10
+                    temp //= 10
+                    high = temp % 10
+                    temp //= 10
+                    bcd[i] = (high << 4) | low
+                _send_civ_cmd(bytes([0x05]) + bytes(bcd))
+
+            radio_state["freq"] = center
+            radio_state["band"] = band_name
+            return jsonify({"freq": center, "band": band_name})
+
+    return f"Unknown band: {band_name}", 400
+
+
+@app.route("/trx/set_power", methods=["POST"])
+def trx_set_power():
+    """Set transceiver output power (0-100%)."""
+    if not auth():
+        return "no auth", 403
+    data = request.json
+    power = data.get("power", 50)
+    power = max(0, min(100, int(power)))
+
+    if _is_kenwood():
+        # Kenwood: PC command (some models support it)
+        _send_kenwood_cmd(f"PC{power:03d};")
+    else:
+        # Icom CI-V: power setting command 0x14
+        # Value 0-255 maps to 0-100%
+        pwr_byte = max(0, min(255, int(power * 255 / 100)))
+        _send_civ_cmd(bytes([0x14, pwr_byte]))
+
+    return jsonify({"power": power})
+
+
+@app.route("/trx/set_af_gain", methods=["POST"])
+def trx_set_af_gain():
+    """Set transceiver AF gain (0-100%)."""
+    if not auth():
+        return "no auth", 403
+    data = request.json
+    gain = data.get("gain", 50)
+    gain = max(0, min(100, int(gain)))
+
+    if _is_kenwood():
+        # Kenwood: AG command
+        _send_kenwood_cmd(f"AG{gain:03d};")
+    else:
+        # Icom CI-V: AF gain command 0x14 with sub-command 0x01
+        gain_byte = max(0, min(255, int(gain * 255 / 100)))
+        _send_civ_cmd(bytes([0x14, 0x01, gain_byte]))
+
+    return jsonify({"af_gain": gain})
 
 
 # ================= AUDIO API =================
