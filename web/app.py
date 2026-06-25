@@ -2496,11 +2496,16 @@ def trx_set_mode():
         # Same as frequency set: use _send_civ_cmd with payload 06 <mode_byte>
         # 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW
         mode_byte = ICOM_MODES.get(mode, 0x01)
-        cmd = bytes([0x06, mode_byte])
-        _send_civ_cmd(cmd)
+        # Try with 1 byte: 06 <mode>
+        cmd1 = bytes([0x06, mode_byte])
+        _send_civ_cmd(cmd1)
+        # Try with 2 bytes: 06 <mode> 00 (filter byte)
+        cmd2 = bytes([0x06, mode_byte, 0x00])
+        _send_civ_cmd(cmd2)
         # Also try 0xE0 for G90
         if trx_config.get("radio_addr", 0x70) != 0xE0:
-            _send_civ_cmd(cmd, to_addr=0xE0)
+            _send_civ_cmd(cmd1, to_addr=0xE0)
+            _send_civ_cmd(cmd2, to_addr=0xE0)
 
     radio_state["mode"] = mode
     return jsonify({"mode": mode})
