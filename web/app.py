@@ -684,6 +684,18 @@ class CIVDecoder:
             }
             radio_state["mode"] = modes.get(mode_byte, "Unknown")
 
+        elif cmd == 0x14 and len(frame) >= 7:
+            # Response to power/AF gain query
+            sub_cmd = frame[5]
+            if sub_cmd == 0x00 and len(frame) >= 8:
+                # Power level response
+                pwr_val = frame[6]
+                radio_state["power"] = min(100, max(0, int(pwr_val * 100 / 255)))
+            elif sub_cmd == 0x01 and len(frame) >= 8:
+                # AF gain response
+                af_val = frame[6]
+                radio_state["af_gain"] = min(100, max(0, int(af_val * 100 / 255)))
+
 
 class KenwoodDecoder:
     """Decoder for Kenwood CAT protocol (ASCII-based, terminated by ';')."""
@@ -888,15 +900,39 @@ async def poller():
         if protocol == "Kenwood":
             # Kenwood CAT: IF; returns frequency + mode of the active VFO (A or B)
             cmd = b"IF;"
+            try:
+                ser.write(cmd)
+            except:
+                pass
         else:
-            # Icom CI-V: poll frequency
+            # Icom CI-V: poll frequency (0x03)
             cmd = bytes(
                 [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x03, 0xFD]
             )
-        try:
-            ser.write(cmd)
-        except:
-            pass
+            try:
+                ser.write(cmd)
+            except:
+                pass
+
+            # Also poll power level (0x14 0x00) and AF gain (0x14 0x01) every 4th cycle
+            if int(time.time()) % 4 == 0:
+                try:
+                    # Poll power
+                    pwr_cmd = bytes(
+                        [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x14, 0x00, 0xFD]
+                    )
+                    ser.write(pwr_cmd)
+                except:
+                    pass
+            elif int(time.time()) % 4 == 2:
+                try:
+                    # Poll AF gain
+                    af_cmd = bytes(
+                        [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x14, 0x01, 0xFD]
+                    )
+                    ser.write(af_cmd)
+                except:
+                    pass
 
 
 async def start_trx_server():
@@ -1649,6 +1685,7 @@ HTML_TEMPLATE = """
 
         // TRX functions
         function loadTrxState() {
+            // First call: send poll commands to the radio
             fetch('/trx/state')
                 .then(r => r.json())
                 .then(data => {
@@ -1691,6 +1728,34 @@ HTML_TEMPLATE = """
                 .catch(() => {
                     document.getElementById('trx-status').innerHTML = '🔴 OFFLINE';
                 });
+
+            // Second call after 400ms to get fresh values after radio responds to polls
+            setTimeout(() => {
+                fetch('/trx/state')
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.online) {
+                            // Update power slider with fresh value
+                            if (data.power !== undefined) {
+                                document.getElementById('trx-power-slider').value = data.power;
+                                document.getElementById('trx-power-val').textContent = data.power + '%';
+                            }
+                            // Update AF gain slider with fresh value
+                            if (data.af_gain !== undefined) {
+                                document.getElementById('trx-af-slider').value = data.af_gain;
+                                document.getElementById('trx-af-val').textContent = data.af_gain + '%';
+                            }
+                            // Update mode highlight
+                            document.querySelectorAll('.mode-btn').forEach(btn => {
+                                btn.classList.remove('active');
+                                if (btn.textContent === data.mode) {
+                                    btn.classList.add('active');
+                                }
+                            });
+                        }
+                    })
+                    .catch(() => {});
+            }, 400);
         }
 
         // TRX Control Functions
@@ -2415,6 +2480,27 @@ def bandrelay_state():
 def trx_state():
     if not auth():
         return jsonify({})
+    # Send poll commands to get fresh data from the radio
+    if ser and ser.is_open and trx_config.get("enabled", True):
+        protocol = trx_config.get("protocol", "Icom")
+        try:
+            if protocol == "Kenwood":
+                ser.write(b"IF;")
+            else:
+                # Poll frequency
+                ser.write(bytes(
+                    [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x03, 0xFD]
+                ))
+                # Poll power
+                ser.write(bytes(
+                    [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x14, 0x00, 0xFD]
+                ))
+                # Poll AF gain
+                ser.write(bytes(
+                    [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x14, 0x01, 0xFD]
+                ))
+        except:
+            pass
     return jsonify(
         {
             "freq": radio_state["freq"],
