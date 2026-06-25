@@ -2346,17 +2346,18 @@ def trx_config_route():
 # ================= TRX CONTROL API =================
 
 # Amateur band definitions (Hz)
+# Each entry: (from_khz, to_khz, name, target_freq_hz)
 AMATEUR_BANDS = [
-    (1800000, 2000000, "160m"),
-    (3500000, 3800000, "80m"),
-    (7000000, 7200000, "40m"),
-    (10100000, 10150000, "30m"),
-    (14000000, 14350000, "20m"),
-    (18068000, 18168000, "17m"),
-    (21000000, 21450000, "15m"),
-    (24890000, 24990000, "12m"),
-    (28000000, 29700000, "10m"),
-    (50000000, 54000000, "6m"),
+    (1800, 2000, "160m", 1840000),
+    (3500, 3800, "80m", 3573000),
+    (7000, 7200, "40m", 7074000),
+    (10100, 10150, "30m", 10136000),
+    (14000, 14350, "20m", 14074000),
+    (18068, 18168, "17m", 18100000),
+    (21000, 21450, "15m", 21074000),
+    (24890, 24990, "12m", 24915000),
+    (28000, 29700, "10m", 28074000),
+    (50000, 54000, "6m", 50313000),
 ]
 
 def _send_civ_cmd(payload: bytes, to_addr=None):
@@ -2421,9 +2422,6 @@ def trx_set_freq():
             bcd[i] = (high << 4) | low
         cmd = bytes([0x05]) + bytes(bcd)
         _send_civ_cmd(cmd)
-        # Also try 0xE0 for G90
-        if trx_config.get("radio_addr", 0x70) != 0xE0:
-            _send_civ_cmd(cmd, to_addr=0xE0)
 
     radio_state["freq"] = freq_hz
     radio_state["band"] = freq_to_band(freq_hz)
@@ -2459,9 +2457,6 @@ def trx_freq_step():
             bcd[i] = (high << 4) | low
         cmd = bytes([0x05]) + bytes(bcd)
         _send_civ_cmd(cmd)
-        # Also try 0xE0 for G90
-        if trx_config.get("radio_addr", 0x70) != 0xE0:
-            _send_civ_cmd(cmd, to_addr=0xE0)
 
     radio_state["freq"] = new_freq
     radio_state["band"] = freq_to_band(new_freq)
@@ -2470,22 +2465,21 @@ def trx_freq_step():
 
 @app.route("/trx/set_band", methods=["POST"])
 def trx_set_band():
-    """Set frequency to the center of an amateur band."""
+    """Set frequency to the configured target frequency for an amateur band."""
     if not auth():
         return "no auth", 403
     data = request.json
     band_name = data.get("band", "")
 
-    for start, end, name in AMATEUR_BANDS:
+    for start, end, name, target_freq in AMATEUR_BANDS:
         if name == band_name:
-            center = (start + end) // 2
             # Send frequency
             if _is_kenwood():
-                cmd = f"FA{center:011d};"
+                cmd = f"FA{target_freq:011d};"
                 _send_kenwood_cmd(cmd)
             else:
                 bcd = bytearray(5)
-                temp = center
+                temp = target_freq
                 for i in range(5):
                     low = temp % 10
                     temp //= 10
@@ -2494,13 +2488,10 @@ def trx_set_band():
                     bcd[i] = (high << 4) | low
                 cmd = bytes([0x05]) + bytes(bcd)
                 _send_civ_cmd(cmd)
-                # Also try 0xE0 for G90
-                if trx_config.get("radio_addr", 0x70) != 0xE0:
-                    _send_civ_cmd(cmd, to_addr=0xE0)
 
-            radio_state["freq"] = center
+            radio_state["freq"] = target_freq
             radio_state["band"] = band_name
-            return jsonify({"freq": center, "band": band_name})
+            return jsonify({"freq": target_freq, "band": band_name})
 
     return f"Unknown band: {band_name}", 400
 
@@ -2523,9 +2514,6 @@ def trx_set_power():
         pwr_byte = max(0, min(255, int(power * 255 / 100)))
         cmd = bytes([0x14, pwr_byte])
         _send_civ_cmd(cmd)
-        # Also try 0xE0 for G90
-        if trx_config.get("radio_addr", 0x70) != 0xE0:
-            _send_civ_cmd(cmd, to_addr=0xE0)
 
     radio_state["power"] = power
     return jsonify({"power": power})
@@ -2548,9 +2536,6 @@ def trx_set_af_gain():
         gain_byte = max(0, min(255, int(gain * 255 / 100)))
         cmd = bytes([0x14, 0x01, gain_byte])
         _send_civ_cmd(cmd)
-        # Also try 0xE0 for G90
-        if trx_config.get("radio_addr", 0x70) != 0xE0:
-            _send_civ_cmd(cmd, to_addr=0xE0)
 
     radio_state["af_gain"] = gain
     return jsonify({"af_gain": gain})
