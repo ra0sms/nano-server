@@ -248,7 +248,6 @@ def set_relays_for_frequency(freq_hz):
         set_relay(r, True)
 
     apply()
-    print(f"[BAND] Freq={freq_hz/1000:.1f} kHz -> relays ON: {target}")
     return target
 
 
@@ -294,7 +293,6 @@ def _find_alsa_card():
                 m = re.search(r'\[(\w+)\]', line)
                 if m:
                     card_id = m.group(1)
-                    print(f"[audio] Found C-Media USB Audio card: '{card_id}'")
                     return card_id
         # Second pass: any USB Audio device that isn't webcam
         for line in content.splitlines():
@@ -302,7 +300,6 @@ def _find_alsa_card():
                 m = re.search(r'\[(\w+)\]', line)
                 if m:
                     card_id = m.group(1)
-                    print(f"[audio] Found USB Audio card: '{card_id}'")
                     return card_id
     except Exception as e:
         print(f"[audio] Error reading /proc/asound/cards: {e}")
@@ -316,7 +313,6 @@ def _find_alsa_card():
             if m:
                 card_id = m.group(1)
                 if card_id not in ("audiocodec", "webcam"):
-                    print(f"[audio] Fallback ALSA card: '{card_id}'")
                     return card_id
     except Exception:
         pass
@@ -345,7 +341,6 @@ def _find_speaker_control():
                         )
                         if r2.returncode == 0 and "%" in r2.stdout:
                             if "Playback" in name or "Speaker" in name or "PCM" in name or "Master" in name or "Headphone" in name:
-                                print(f"[audio] Auto-detected speaker control: '{name}'")
                                 return name
                     except Exception:
                         pass
@@ -360,7 +355,6 @@ def _find_speaker_control():
                 capture_output=True, text=True, timeout=3
             )
             if r.returncode == 0 and "%" in r.stdout:
-                print(f"[audio] Fallback: using '{name}'")
                 return name
         except Exception:
             pass
@@ -378,7 +372,6 @@ def _find_speaker_control():
                     numid = m.group(1)
                     name = m.group(2)
                     if "Playback" in name or "Speaker" in name or "PCM" in name:
-                        print(f"[audio] Last resort: using numid={numid} ('{name}')")
                         return f"numid={numid}"
     except Exception:
         pass
@@ -667,7 +660,6 @@ class CIVDecoder:
                 if freq:
                     radio_state["freq"] = freq
                     radio_state["band"] = freq_to_band(freq)
-                    print(f"[TRX] Freq={freq / 1000000:.6f} MHz")
                     set_relays_for_frequency(freq)
 
         elif cmd == 0x04 and len(frame) >= 7:
@@ -725,7 +717,6 @@ class KenwoodDecoder:
                 if 100000 <= freq_hz <= 3000000000:
                     radio_state["freq"] = freq_hz
                     radio_state["band"] = freq_to_band(freq_hz)
-                    print(f"[TRX] Freq={freq_hz / 1000000:.6f} MHz (Kenwood)")
                     set_relays_for_frequency(freq_hz)
             except ValueError:
                 pass
@@ -810,12 +801,9 @@ def init_serial():
         protocol = trx_config.get("protocol", "Icom")
         if protocol == "Kenwood":
             decoder = KenwoodDecoder()
-            print(f"[TRX] Using Kenwood CAT protocol")
         else:
             decoder = CIVDecoder()
-            print(f"[TRX] Using Icom CI-V protocol")
         radio_state["online"] = True
-        print(f"[TRX] Connected to {trx_config['serial_port']}")
         return True
     except Exception as e:
         radio_state["online"] = False
@@ -855,7 +843,6 @@ async def broadcast(data):
 
 async def tcp_client(reader, writer):
     addr = writer.get_extra_info("peername")
-    print(f"[TCP] Client: {addr}")
     clients.add(writer)
     try:
         while True:
@@ -906,7 +893,6 @@ async def start_trx_server():
     thread.start()
 
     server = await asyncio.start_server(tcp_client, "0.0.0.0", trx_config["tcp_port"])
-    print(f"[TRX] TCP port {trx_config['tcp_port']}")
 
     asyncio.create_task(poller())
 
@@ -1737,7 +1723,6 @@ HTML_TEMPLATE = """
         }
 
         // Auto-refresh TRX state every 2 seconds when TRX tab is active
-        let trxInterval = null;
         setInterval(() => {
             const activePanel = document.querySelector('.panel.active');
             if (activePanel && activePanel.id === 'trx-panel') {
@@ -2276,7 +2261,6 @@ def bandrelay_toggle():
     global band_relay_enabled
     data = request.json
     band_relay_enabled = data.get("enabled", True)
-    print(f"[BAND] Auto relay switching: {'ON' if band_relay_enabled else 'OFF'}")
     return jsonify({"enabled": band_relay_enabled})
 
 
@@ -2367,13 +2351,11 @@ def _send_civ_cmd(payload: bytes, to_addr=None):
     If to_addr is None, uses radio_addr from config.
     """
     if not ser or not ser.is_open:
-        print(f"[TRX] CIV send failed: ser={ser is not None}, is_open={ser.is_open if ser else False}")
         return False
     try:
         if to_addr is None:
             to_addr = trx_config["radio_addr"]
         frame = bytes([0xFE, 0xFE, to_addr, trx_config["ctrl_addr"]]) + payload + bytes([0xFD])
-        print(f"[TRX] CIV send: {frame.hex()}")
         ser.write(frame)
         return True
     except Exception as e:
