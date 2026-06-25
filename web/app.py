@@ -2551,8 +2551,14 @@ def trx_set_mode():
         md_val = KENWOOD_MODES.get(mode, "2")
         _send_kenwood_cmd(f"MD{md_val};")
     else:
+        # Icom CI-V: set mode command 0x07
+        # Format: 0x07 + mode_byte + 0x00 (filter byte, 0x00 = auto)
+        # Mode bytes: 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW, 0x04=RTTY, 0x05=FM
         mode_byte = ICOM_MODES.get(mode, 0x01)
-        _send_civ_cmd(bytes([0x06, mode_byte]))
+        # Send primary command (0x07) - works on IC-7300, IC-705, IC-7610 etc.
+        _send_civ_cmd(bytes([0x07, mode_byte, 0x00]))
+        # Also send alternate command (0x1A 0x06) for older models (IC-706, IC-7000 etc.)
+        _send_civ_cmd(bytes([0x1A, 0x06, mode_byte]))
 
     radio_state["mode"] = mode
     return jsonify({"mode": mode})
