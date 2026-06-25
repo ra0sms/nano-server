@@ -2491,15 +2491,14 @@ def trx_set_mode():
         _send_kenwood_cmd(f"MD{md_val};")
     else:
         # Xiegu G90 CI-V: set mode using 0x06 command (sets mode for current VFO)
-        # Same framing as frequency set: FE FE <to> <from> 06 <mode_byte> FD
+        # Same as frequency set: use _send_civ_cmd with payload 06 <mode_byte>
         # 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW
         mode_byte = ICOM_MODES.get(mode, 0x01)
-        if ser and ser.is_open:
-            try:
-                frame = bytes([0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x06, mode_byte, 0xFD])
-                ser.write(frame)
-            except Exception as e:
-                print(f"[TRX] Mode set error: {e}")
+        cmd = bytes([0x06, mode_byte])
+        _send_civ_cmd(cmd)
+        # Also try 0xE0 for G90
+        if trx_config.get("radio_addr", 0x70) != 0xE0:
+            _send_civ_cmd(cmd, to_addr=0xE0)
 
     radio_state["mode"] = mode
     return jsonify({"mode": mode})
