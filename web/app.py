@@ -2492,20 +2492,18 @@ def trx_set_mode():
         md_val = KENWOOD_MODES.get(mode, "2")
         _send_kenwood_cmd(f"MD{md_val};")
     else:
-        # Xiegu G90 CI-V: set mode using 0x06 command (sets mode for current VFO)
-        # Same as frequency set: use _send_civ_cmd with payload 06 <mode_byte>
+        # Xiegu G90 CI-V: set mode using 0x06 command
+        # Same framing as poller: FE FE <radio_addr> <ctrl_addr> 06 <mode_byte> FD
         # 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW
         mode_byte = ICOM_MODES.get(mode, 0x01)
-        # Try with 1 byte: 06 <mode>
-        cmd1 = bytes([0x06, mode_byte])
-        _send_civ_cmd(cmd1)
-        # Try with 2 bytes: 06 <mode> 00 (filter byte)
-        cmd2 = bytes([0x06, mode_byte, 0x00])
-        _send_civ_cmd(cmd2)
-        # Also try 0xE0 for G90
-        if trx_config.get("radio_addr", 0x70) != 0xE0:
-            _send_civ_cmd(cmd1, to_addr=0xE0)
-            _send_civ_cmd(cmd2, to_addr=0xE0)
+        if ser and ser.is_open:
+            try:
+                # Send to configured radio_addr (same as poller)
+                frame = bytes([0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x06, mode_byte, 0xFD])
+                print(f"[TRX] Mode set: {frame.hex()}")
+                ser.write(frame)
+            except Exception as e:
+                print(f"[TRX] Mode set error: {e}")
 
     radio_state["mode"] = mode
     return jsonify({"mode": mode})
