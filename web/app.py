@@ -1234,28 +1234,6 @@ HTML_TEMPLATE = """
         .band-btn:active {
             transform: scale(0.95);
         }
-        .mode-btn {
-            padding: 8px 16px;
-            border: 2px solid #e67e22;
-            border-radius: 6px;
-            background: transparent;
-            color: #e67e22;
-            font-size: 13px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: 0.15s;
-        }
-        .mode-btn:hover {
-            background: #e67e22;
-            color: white;
-        }
-        .mode-btn.active {
-            background: #e67e22;
-            color: white;
-        }
-        .mode-btn:active {
-            transform: scale(0.95);
-        }
     </style>
 </head>
 <body>
@@ -1328,16 +1306,6 @@ HTML_TEMPLATE = """
                     <button class="band-btn" onclick="setBand('12m')">12m</button>
                     <button class="band-btn" onclick="setBand('10m')">10m</button>
                     <button class="band-btn" onclick="setBand('6m')">6m</button>
-                </div>
-            </div>
-
-            <!-- Mode Selection -->
-            <div style="margin: 15px 0;">
-                <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
-                    <button class="mode-btn" onclick="setMode('CW')">CW</button>
-                    <button class="mode-btn" onclick="setMode('LSB')">LSB</button>
-                    <button class="mode-btn" onclick="setMode('USB')">USB</button>
-                    <button class="mode-btn" onclick="setMode('AM')">AM</button>
                 </div>
             </div>
 
@@ -1420,6 +1388,8 @@ HTML_TEMPLATE = """
                     <option value="Icom">Icom (CI-V)</option>
                     <option value="Kenwood">Kenwood</option>
                 </select>
+                <label>Transceiver Address (hex):</label>
+                <input type="text" id="trx-radio-addr" placeholder="e.g. 0x70" maxlength="6">
                 <label>Enabled:</label>
                 <select id="trx-enabled">
                     <option value="true">Yes</option>
@@ -1645,14 +1615,6 @@ HTML_TEMPLATE = """
                     }
                     bandDiv.textContent = 'Band: ' + data.band;
                     modeDiv.textContent = 'Mode: ' + data.mode;
-
-                    // Highlight active mode button
-                    document.querySelectorAll('.mode-btn').forEach(btn => {
-                        btn.classList.remove('active');
-                        if (btn.textContent === data.mode) {
-                            btn.classList.add('active');
-                        }
-                    });
                 })
                 .catch(() => {
                     document.getElementById('trx-status').innerHTML = '🔴 OFFLINE';
@@ -1692,23 +1654,6 @@ HTML_TEMPLATE = """
             .catch(() => showToast('❌ Failed to switch band', false));
         }
 
-        function setMode(mode) {
-            fetch('/trx/set_mode', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({mode: mode})
-            })
-            .then(r => {
-                if (!r.ok) throw new Error('Invalid mode');
-                return r.json();
-            })
-            .then(data => {
-                showToast('📻 Mode: ' + data.mode, true);
-                loadTrxState();
-            })
-            .catch(() => showToast('❌ Failed to set mode', false));
-        }
-
         function loadTrxConfig() {
             fetch('/trx/config')
                 .then(r => r.json())
@@ -1717,14 +1662,35 @@ HTML_TEMPLATE = """
                     document.getElementById('trx-baudrate').value = cfg.baudrate;
                     document.getElementById('trx-protocol').value = cfg.protocol;
                     document.getElementById('trx-enabled').value = cfg.enabled;
+                    // Format radio_addr as hex string
+                    document.getElementById('trx-radio-addr').value = '0x' + cfg.radio_addr.toString(16).toUpperCase().padStart(2, '0');
                 });
         }
 
         function saveTrxSettings() {
+            // Validate transceiver address
+            const addrStr = document.getElementById('trx-radio-addr').value.trim();
+            let radioAddr;
+            if (!addrStr) {
+                showToast('❌ Transceiver address is required', false);
+                return;
+            }
+            const addrMatch = addrStr.match(/^0x([0-9a-fA-F]{1,2})$/);
+            if (!addrMatch) {
+                showToast('❌ Invalid address format. Use hex format: 0x00-0xFF', false);
+                return;
+            }
+            radioAddr = parseInt(addrStr, 16);
+            if (isNaN(radioAddr) || radioAddr < 0 || radioAddr > 255) {
+                showToast('❌ Address must be between 0x00 and 0xFF', false);
+                return;
+            }
+
             const data = {
                 serial_port: document.getElementById('trx-port').value,
                 baudrate: parseInt(document.getElementById('trx-baudrate').value),
                 protocol: document.getElementById('trx-protocol').value,
+                radio_addr: radioAddr,
                 enabled: document.getElementById('trx-enabled').value === 'true'
             };
 
@@ -1736,7 +1702,7 @@ HTML_TEMPLATE = """
                 if (r.ok) {
                     showToast('✅ TRX settings saved successfully!', true);
                 } else {
-                    showToast('❌ Failed to save TRX settings', false);
+                    return r.text().then(t => showToast('❌ ' + t, false));
                 }
             }).catch(() => showToast('❌ Network error while saving', false));
         }
@@ -2353,6 +2319,13 @@ def trx_config_route():
         return jsonify(trx_config)
 
     data = request.json
+
+    # Validate radio_addr if provided
+    if "radio_addr" in data:
+        addr = data["radio_addr"]
+        if not isinstance(addr, int) or addr < 0 or addr > 255:
+            return "Invalid transceiver address: must be 0-255 (0x00-0xFF)", 400
+
     old_port = trx_config["serial_port"]
     old_baud = trx_config["baudrate"]
     old_protocol = trx_config.get("protocol", "Icom")
@@ -2385,27 +2358,6 @@ AMATEUR_BANDS = [
     (28000000, 29700000, "10m"),
     (50000000, 54000000, "6m"),
 ]
-
-# Mode definitions for Xiegu G90 CI-V
-# G90 uses command 0x06 to set mode for current VFO
-# 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW
-ICOM_MODES = {
-    "LSB": 0x00,
-    "USB": 0x01,
-    "AM": 0x02,
-    "CW": 0x03,
-}
-
-# Mode definitions for Kenwood
-KENWOOD_MODES = {
-    "LSB": "1",
-    "USB": "2",
-    "CW": "3",
-    "FM": "4",
-    "AM": "5",
-    "RTTY": "6",
-}
-
 
 def _send_civ_cmd(payload: bytes, to_addr=None):
     """Send a CI-V command frame and return True if sent successfully.
@@ -2476,37 +2428,6 @@ def trx_set_freq():
     radio_state["freq"] = freq_hz
     radio_state["band"] = freq_to_band(freq_hz)
     return jsonify({"freq": freq_hz, "band": radio_state["band"]})
-
-
-@app.route("/trx/set_mode", methods=["POST"])
-def trx_set_mode():
-    """Set transceiver mode."""
-    if not auth():
-        return "no auth", 403
-    data = request.json
-    mode = data.get("mode", "USB")
-    if mode not in ("CW", "LSB", "USB", "AM"):
-        return f"Invalid mode: {mode}", 400
-
-    if _is_kenwood():
-        md_val = KENWOOD_MODES.get(mode, "2")
-        _send_kenwood_cmd(f"MD{md_val};")
-    else:
-        # Xiegu G90 CI-V: set active VFO mode using 0x01 command
-        # From G90 manual: 0x01 = Set active VFO mode (table2-2)
-        # Same framing as poller: FE FE <radio_addr> <ctrl_addr> 01 <mode_byte> FD
-        # 0x00=LSB, 0x01=USB, 0x02=AM, 0x03=CW
-        mode_byte = ICOM_MODES.get(mode, 0x01)
-        if ser and ser.is_open:
-            try:
-                frame = bytes([0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x01, mode_byte, 0xFD])
-                print(f"[TRX] Mode set: {frame.hex()}")
-                ser.write(frame)
-            except Exception as e:
-                print(f"[TRX] Mode set error: {e}")
-
-    radio_state["mode"] = mode
-    return jsonify({"mode": mode})
 
 
 @app.route("/trx/freq_step", methods=["POST"])
