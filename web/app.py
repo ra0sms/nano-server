@@ -68,8 +68,6 @@ radio_state = {
     "online": False,
     "last_rx": 0,
     "mode": "Unknown",
-    "power": 50,
-    "af_gain": 50,
 }
 
 # Serial and async components
@@ -684,17 +682,6 @@ class CIVDecoder:
             }
             radio_state["mode"] = modes.get(mode_byte, "Unknown")
 
-        elif cmd == 0x14 and len(frame) >= 7:
-            # Response to power/AF gain query
-            sub_cmd = frame[5]
-            if sub_cmd == 0x00 and len(frame) >= 8:
-                # Power level response
-                pwr_val = frame[6]
-                radio_state["power"] = min(100, max(0, int(pwr_val * 100 / 255)))
-            elif sub_cmd == 0x01 and len(frame) >= 8:
-                # AF gain response
-                af_val = frame[6]
-                radio_state["af_gain"] = min(100, max(0, int(af_val * 100 / 255)))
 
 
 class KenwoodDecoder:
@@ -900,39 +887,15 @@ async def poller():
         if protocol == "Kenwood":
             # Kenwood CAT: IF; returns frequency + mode of the active VFO (A or B)
             cmd = b"IF;"
-            try:
-                ser.write(cmd)
-            except:
-                pass
         else:
-            # Icom CI-V: poll frequency (0x03)
+            # Icom CI-V: poll frequency
             cmd = bytes(
                 [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x03, 0xFD]
             )
-            try:
-                ser.write(cmd)
-            except:
-                pass
-
-            # Also poll power level (0x14 0x00) and AF gain (0x14 0x01) every 4th cycle
-            if int(time.time()) % 4 == 0:
-                try:
-                    # Poll power
-                    pwr_cmd = bytes(
-                        [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x14, 0x00, 0xFD]
-                    )
-                    ser.write(pwr_cmd)
-                except:
-                    pass
-            elif int(time.time()) % 4 == 2:
-                try:
-                    # Poll AF gain
-                    af_cmd = bytes(
-                        [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x14, 0x01, 0xFD]
-                    )
-                    ser.write(af_cmd)
-                except:
-                    pass
+        try:
+            ser.write(cmd)
+        except:
+            pass
 
 
 async def start_trx_server():
@@ -1352,12 +1315,6 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
-            <!-- Manual Frequency Input -->
-            <div style="margin: 15px 0; display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap;">
-                <input type="number" id="trx-freq-input" placeholder="Frequency (Hz)" style="width: 200px; padding: 10px; font-size: 16px; background: #2a2d34; color: white; border: 1px solid #444; border-radius: 6px;">
-                <button class="save-btn" onclick="setFreqFromInput()">Set Freq</button>
-            </div>
-
             <!-- Band Selection -->
             <div style="margin: 15px 0;">
                 <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
@@ -1381,22 +1338,6 @@ HTML_TEMPLATE = """
                     <button class="mode-btn" onclick="setMode('LSB')">LSB</button>
                     <button class="mode-btn" onclick="setMode('USB')">USB</button>
                     <button class="mode-btn" onclick="setMode('AM')">AM</button>
-                </div>
-            </div>
-
-            <!-- Power & AF Gain Sliders -->
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 15px 0;">
-                <div style="background: #2a2d34; padding: 15px; border-radius: 8px;">
-                    <label style="display: block; margin-bottom: 8px; font-weight: bold;">Output Power</label>
-                    <input type="range" id="trx-power-slider" min="0" max="100" value="50" class="audio-slider" oninput="document.getElementById('trx-power-val').textContent = this.value + '%'">
-                    <div class="value-display" id="trx-power-val" style="font-size: 16px; margin-top: 8px;">50%</div>
-                    <button class="save-btn" onclick="setPower()" style="margin-top: 8px; width: 100%;">Set Power</button>
-                </div>
-                <div style="background: #2a2d34; padding: 15px; border-radius: 8px;">
-                    <label style="display: block; margin-bottom: 8px; font-weight: bold;">AF Gain</label>
-                    <input type="range" id="trx-af-slider" min="0" max="100" value="50" class="audio-slider" oninput="document.getElementById('trx-af-val').textContent = this.value + '%'">
-                    <div class="value-display" id="trx-af-val" style="font-size: 16px; margin-top: 8px;">50%</div>
-                    <button class="save-btn" onclick="setAfGain()" style="margin-top: 8px; width: 100%;">Set AF Gain</button>
                 </div>
             </div>
 
@@ -1685,7 +1626,6 @@ HTML_TEMPLATE = """
 
         // TRX functions
         function loadTrxState() {
-            // First call: send poll commands to the radio
             fetch('/trx/state')
                 .then(r => r.json())
                 .then(data => {
@@ -1706,17 +1646,6 @@ HTML_TEMPLATE = """
                     bandDiv.textContent = 'Band: ' + data.band;
                     modeDiv.textContent = 'Mode: ' + data.mode;
 
-                    // Update power slider
-                    if (data.power !== undefined) {
-                        document.getElementById('trx-power-slider').value = data.power;
-                        document.getElementById('trx-power-val').textContent = data.power + '%';
-                    }
-                    // Update AF gain slider
-                    if (data.af_gain !== undefined) {
-                        document.getElementById('trx-af-slider').value = data.af_gain;
-                        document.getElementById('trx-af-val').textContent = data.af_gain + '%';
-                    }
-
                     // Highlight active mode button
                     document.querySelectorAll('.mode-btn').forEach(btn => {
                         btn.classList.remove('active');
@@ -1728,34 +1657,6 @@ HTML_TEMPLATE = """
                 .catch(() => {
                     document.getElementById('trx-status').innerHTML = '🔴 OFFLINE';
                 });
-
-            // Second call after 400ms to get fresh values after radio responds to polls
-            setTimeout(() => {
-                fetch('/trx/state')
-                    .then(r => r.json())
-                    .then(data => {
-                        if (data.online) {
-                            // Update power slider with fresh value
-                            if (data.power !== undefined) {
-                                document.getElementById('trx-power-slider').value = data.power;
-                                document.getElementById('trx-power-val').textContent = data.power + '%';
-                            }
-                            // Update AF gain slider with fresh value
-                            if (data.af_gain !== undefined) {
-                                document.getElementById('trx-af-slider').value = data.af_gain;
-                                document.getElementById('trx-af-val').textContent = data.af_gain + '%';
-                            }
-                            // Update mode highlight
-                            document.querySelectorAll('.mode-btn').forEach(btn => {
-                                btn.classList.remove('active');
-                                if (btn.textContent === data.mode) {
-                                    btn.classList.add('active');
-                                }
-                            });
-                        }
-                    })
-                    .catch(() => {});
-            }, 400);
         }
 
         // TRX Control Functions
@@ -1772,26 +1673,6 @@ HTML_TEMPLATE = """
                 loadTrxState();
             })
             .catch(() => showToast('❌ Failed to change frequency', false));
-        }
-
-        function setFreqFromInput() {
-            const input = document.getElementById('trx-freq-input');
-            const freq = parseInt(input.value);
-            if (!freq || freq < 100000 || freq > 3000000000) {
-                showToast('❌ Invalid frequency (100000 - 3000000000 Hz)', false);
-                return;
-            }
-            fetch('/trx/set_freq', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({freq: freq})
-            })
-            .then(r => r.json())
-            .then(data => {
-                showToast('📡 Freq set to ' + (data.freq / 1000000).toFixed(6) + ' MHz', true);
-                loadTrxState();
-            })
-            .catch(() => showToast('❌ Failed to set frequency', false));
         }
 
         function setBand(band) {
@@ -1826,34 +1707,6 @@ HTML_TEMPLATE = """
                 loadTrxState();
             })
             .catch(() => showToast('❌ Failed to set mode', false));
-        }
-
-        function setPower() {
-            const val = document.getElementById('trx-power-slider').value;
-            fetch('/trx/set_power', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({power: parseInt(val)})
-            })
-            .then(r => {
-                if (r.ok) showToast('🔋 Power set to ' + val + '%', true);
-                else showToast('❌ Failed to set power', false);
-            })
-            .catch(() => showToast('❌ Network error', false));
-        }
-
-        function setAfGain() {
-            const val = document.getElementById('trx-af-slider').value;
-            fetch('/trx/set_af_gain', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({gain: parseInt(val)})
-            })
-            .then(r => {
-                if (r.ok) showToast('🔊 AF gain set to ' + val + '%', true);
-                else showToast('❌ Failed to set AF gain', false);
-            })
-            .catch(() => showToast('❌ Network error', false));
         }
 
         function loadTrxConfig() {
@@ -2480,27 +2333,6 @@ def bandrelay_state():
 def trx_state():
     if not auth():
         return jsonify({})
-    # Send poll commands to get fresh data from the radio
-    if ser and ser.is_open and trx_config.get("enabled", True):
-        protocol = trx_config.get("protocol", "Icom")
-        try:
-            if protocol == "Kenwood":
-                ser.write(b"IF;")
-            else:
-                # Poll frequency
-                ser.write(bytes(
-                    [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x03, 0xFD]
-                ))
-                # Poll power
-                ser.write(bytes(
-                    [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x14, 0x00, 0xFD]
-                ))
-                # Poll AF gain
-                ser.write(bytes(
-                    [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x14, 0x01, 0xFD]
-                ))
-        except:
-            pass
     return jsonify(
         {
             "freq": radio_state["freq"],
@@ -2508,8 +2340,6 @@ def trx_state():
             "online": radio_state["online"],
             "mode": radio_state["mode"],
             "last_rx": radio_state["last_rx"],
-            "power": radio_state.get("power", 50),
-            "af_gain": radio_state.get("af_gain", 50),
         }
     )
 
