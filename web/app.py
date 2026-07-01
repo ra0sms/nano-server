@@ -1534,12 +1534,12 @@ HTML_TEMPLATE = """
             const el = document.getElementById('ptt-indicator');
             if (!el) return;
             if (pttActive) {
-                el.textContent = '🔴 PTT: ON';
+                el.textContent = '● PTT: ON';
                 el.style.background = '#d64545';
                 el.style.color = 'white';
             } else {
-                el.textContent = '🟢 PTT: OFF';
-                el.style.background = '#1a1d24';
+                el.textContent = '● PTT: OFF';
+                el.style.background = '#2a2d34';
                 el.style.color = '#7f8c8d';
             }
         }
