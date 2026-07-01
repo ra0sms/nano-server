@@ -1268,6 +1268,12 @@ HTML_TEMPLATE = """
 
     <!-- Main Panel -->
     <div id="main-panel" class="panel active">
+        <div class="group" style="text-align:center;padding:12px;">
+            <div id="ptt-indicator" style="font-size:20px;font-weight:bold;padding:8px 16px;border-radius:8px;display:inline-block;">
+                PTT: OFF
+            </div>
+        </div>
+
         <div class="group">
             <h3>Group 1 (<span id="mode0_label">toggle</span>)</h3>
             <div id="relays1" class="relay-grid"></div>
@@ -1523,6 +1529,21 @@ HTML_TEMPLATE = """
             });
         });
 
+        // PTT indicator
+        function updatePttIndicator() {
+            const el = document.getElementById('ptt-indicator');
+            if (!el) return;
+            if (pttActive) {
+                el.textContent = '🔴 PTT: ON';
+                el.style.background = '#d64545';
+                el.style.color = 'white';
+            } else {
+                el.textContent = '🟢 PTT: OFF';
+                el.style.background = '#1a1d24';
+                el.style.color = '#7f8c8d';
+            }
+        }
+
         // Relay functions
         function renderRelays() {
             const container1 = document.getElementById('relays1');
@@ -1543,6 +1564,7 @@ HTML_TEMPLATE = """
                 if (i < 8) container1.appendChild(btn);
                 else container2.appendChild(btn);
             }
+            updatePttIndicator();
         }
 
         function loadRelays() {
@@ -1580,6 +1602,7 @@ HTML_TEMPLATE = """
                 .then(r => r.json())
                 .then(data => {
                     pttActive = data.active;
+                    updatePttIndicator();
                 })
                 .catch(() => {});
         }
