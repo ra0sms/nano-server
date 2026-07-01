@@ -1535,6 +1535,11 @@ HTML_TEMPLATE = """
                 btn.className = 'relay-btn' + (relayState[i] ? ' on' : '');
                 btn.textContent = relayNames[i];
                 btn.onclick = () => toggleRelay(i);
+                if (pttActive) {
+                    btn.style.opacity = '0.5';
+                    btn.style.cursor = 'not-allowed';
+                    btn.title = '🔒 PTT active — relay switching blocked';
+                }
                 if (i < 8) container1.appendChild(btn);
                 else container2.appendChild(btn);
             }
@@ -1571,22 +1576,10 @@ HTML_TEMPLATE = """
         }
 
         function checkPttStatus() {
-            fetch('/ptt/status')
+            return fetch('/ptt/status')
                 .then(r => r.json())
                 .then(data => {
                     pttActive = data.active;
-                    // Visual feedback on relay buttons
-                    document.querySelectorAll('.relay-btn').forEach(btn => {
-                        if (pttActive) {
-                            btn.style.opacity = '0.5';
-                            btn.style.cursor = 'not-allowed';
-                            btn.title = '🔒 PTT active — relay switching blocked';
-                        } else {
-                            btn.style.opacity = '1';
-                            btn.style.cursor = 'pointer';
-                            btn.title = '';
-                        }
-                    });
                 })
                 .catch(() => {});
         }
@@ -2177,16 +2170,19 @@ HTML_TEMPLATE = """
             }
         }, 2000);
 
-        // Auto-refresh relay state on Main tab every 2 seconds
+        // Auto-refresh relay state + PTT status on Main tab every 2 seconds
         setInterval(() => {
             const activePanel = document.querySelector('.panel.active');
             if (activePanel && activePanel.id === 'main-panel') {
-                fetch('/state')
-                    .then(r => r.json())
-                    .then(data => {
-                        relayState = data.state;
-                        relayNames = data.names;
-                        relayMode = data.mode;
+                Promise.all([
+                    fetch('/state').then(r => r.json()),
+                    fetch('/ptt/status').then(r => r.json()),
+                ])
+                    .then(([stateData, pttData]) => {
+                        relayState = stateData.state;
+                        relayNames = stateData.names;
+                        relayMode = stateData.mode;
+                        pttActive = pttData.active;
                         document.getElementById('mode0_label').textContent = relayMode[0];
                         document.getElementById('mode1_label').textContent = relayMode[1];
                         renderRelays();
@@ -2198,10 +2194,8 @@ HTML_TEMPLATE = """
         // Initialize
         loadRelays();
         loadTrxConfig();
+        checkPttStatus();
         showToast('🎉 Welcome to NanoPi Controller!', true);
-
-        // Poll PTT status every second for visual blocking
-        setInterval(checkPttStatus, 1000);
     </script>
 </body>
 </html>
