@@ -57,6 +57,9 @@ MAGIC_PHRASE = b"PING_RESPONSE"
 PTT_KEEPALIVE_TIMEOUT = 0.5   # 500 ms — force PTT off if no packet received
 PTT_KEEPALIVE_CHECK_INTERVAL = 0.1  # 100 ms — check loop granularity
 
+# === PTT Status Broadcast (to web panel) ===
+PTT_STATUS_PORT = 5004  # UDP port for broadcasting PTT status to web panel on localhost
+
 # === CW defaults ===
 WPM_DEFAULT = 20
 WPM_MIN = 5
@@ -127,6 +130,15 @@ def read_allowed_ip(filename):
         return client_ip
 
 
+def broadcast_ptt_status(value: int):
+    """Broadcast PTT status to web panel via UDP on localhost:PTT_STATUS_PORT."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.sendto(bytes([value]), ("127.0.0.1", PTT_STATUS_PORT))
+    except Exception:
+        pass
+
+
 def set_ptt(value: int):
     """Thread-safe PTT update with hardware write"""
     global ptt_state
@@ -139,6 +151,8 @@ def set_ptt(value: int):
             print(f"📡 PTT {'ON' if value else 'OFF'} (GPIO={value})")
         except Exception as e:
             print(f"⚠️ GPIO error: {e}")
+    # Always broadcast status, even if state didn't change (for sync on startup)
+    broadcast_ptt_status(value)
 
 
 def parse_ptt_packet(data: bytes):

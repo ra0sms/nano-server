@@ -111,13 +111,17 @@ def set_relay(n, on):
 
 
 def toggle_relay(n):
+    global state1, state2, ptt_active
+    if ptt_active:
+        print("🔒 PTT active — relay toggle blocked")
+        return
+
     bits = get_state()
     group = 0 if n < 8 else 1
     bit = n if n < 8 else n - 8
     mode = config["group_mode"][group]
 
     if mode == "switch":
-        global state1, state2
         if group == 0:
             state1 = 0xFF & ~(1 << bit)
         else:
@@ -234,8 +238,12 @@ def apply_band_rules(freq_hz):
 
 def set_relays_for_frequency(freq_hz):
     """Set all 16 relays according to band rules for the given frequency."""
-    global state1, state2
+    global state1, state2, ptt_active
     if not band_relay_enabled:
+        return []
+
+    if ptt_active:
+        print("🔒 PTT active — band relay switching blocked")
         return []
 
     target = apply_band_rules(freq_hz)
@@ -265,6 +273,10 @@ UDP_PORT = 5002
 TIMEOUT = 1.0
 CHECK_INTERVAL = 0.3
 MAGIC_PHRASE = b"PING_RESPONSE"
+
+# PTT status from combined_ptt_service (via UDP broadcast on port 5004)
+PTT_STATUS_PORT = 5004
+ptt_active = False
 
 # Global variables for status
 current_rtt = None
@@ -451,6 +463,24 @@ def update_status():
                 current_rtt = None
                 last_update = "No client IP configured"
         time.sleep(CHECK_INTERVAL)
+
+
+def ptt_status_listener():
+    """Listen for PTT status broadcasts from combined_ptt_service on UDP port 5004."""
+    global ptt_active
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", PTT_STATUS_PORT))
+    sock.settimeout(0.5)
+    print(f"[PTT] 📡 Listening for PTT status on 127.0.0.1:{PTT_STATUS_PORT}...")
+    while True:
+        try:
+            data, _ = sock.recvfrom(1024)
+            ptt_active = (data[0] == 1)
+        except socket.timeout:
+            continue
+        except Exception:
+            break
+    sock.close()
 
 
 def percent_to_alsa(vol_percent):
@@ -1467,6 +1497,7 @@ HTML_TEMPLATE = """
         let relayNames = Array(16).fill().map((_, i) => 'Relay ' + (i+1));
         let relayState = Array(16).fill(0);
         let relayMode = ['toggle', 'toggle'];
+        let pttActive = false;
 
         function showToast(msg, isOk = true) {
             const toast = document.getElementById('toast');
@@ -1539,7 +1570,32 @@ HTML_TEMPLATE = """
                 });
         }
 
+        function checkPttStatus() {
+            fetch('/ptt/status')
+                .then(r => r.json())
+                .then(data => {
+                    pttActive = data.active;
+                    // Visual feedback on relay buttons
+                    document.querySelectorAll('.relay-btn').forEach(btn => {
+                        if (pttActive) {
+                            btn.style.opacity = '0.5';
+                            btn.style.cursor = 'not-allowed';
+                            btn.title = '🔒 PTT active — relay switching blocked';
+                        } else {
+                            btn.style.opacity = '1';
+                            btn.style.cursor = 'pointer';
+                            btn.title = '';
+                        }
+                    });
+                })
+                .catch(() => {});
+        }
+
         function toggleRelay(idx) {
+            if (pttActive) {
+                showToast('🔒 PTT active — relay switching blocked', false);
+                return;
+            }
             fetch(`/toggle/${idx}`)
                 .then(r => r.json())
                 .then(data => {
@@ -2143,6 +2199,9 @@ HTML_TEMPLATE = """
         loadRelays();
         loadTrxConfig();
         showToast('🎉 Welcome to NanoPi Controller!', true);
+
+        // Poll PTT status every second for visual blocking
+        setInterval(checkPttStatus, 1000);
     </script>
 </body>
 </html>
@@ -2701,6 +2760,15 @@ def status_connection():
         return jsonify({"rtt": current_rtt, "timestamp": last_update, "status": status})
 
 
+# ================= PTT STATUS API =================
+
+
+@app.route("/ptt/status")
+def ptt_status_api():
+    """Return current PTT state (from combined_ptt_service broadcast)."""
+    return jsonify({"active": ptt_active})
+
+
 # ================= MAIN =================
 
 
@@ -2717,6 +2785,10 @@ async def main():
         init_serial()
 
     start_status_monitoring()
+
+    # Start PTT status listener (UDP broadcast from combined_ptt_service)
+    ptt_thread = threading.Thread(target=ptt_status_listener, daemon=True)
+    ptt_thread.start()
 
     apply()
 

@@ -17,6 +17,7 @@ Desktop client software: https://github.com/ra0sms/caesar-client-desktop
 - 🌐 **Web interface** — relays, TRX, audio, config, status, band relay rules (single UI on port 5050)
 - 🔗 **CAT interface** forwarding over TCP (Icom CI-V and Kenwood protocols)
 - 🔒 **Fail-safe** — PTT is forced OFF when client disconnects
+- 🚫 **PTT Lock** — relay switching (manual and band relay) is blocked while PTT is active to prevent accidental antenna switching during transmission
 - 🎛️ **Band Relay Rules** — automatic relay switching based on transceiver frequency
 - 🔑 **CW Keyer** — Winkeyer protocol over UDP, generates Morse code on GPIO PC1
 
@@ -181,6 +182,21 @@ Auto-switching can be toggled on/off via a checkbox in the Band Relay tab.
 ![WEB5](pics/nano-server-web-5.png)
 
 ![WEB6](pics/nano-server-web-6.png)
+
+### PTT Lock — Relay Protection During Transmission
+
+When PTT is active (transmitting), all relay switching is automatically blocked to prevent accidental antenna switching during transmission. This protects both the transceiver and the antenna system.
+
+**How it works:**
+1. [`combined_ptt_service.py`](network/combined_ptt_service.py) broadcasts PTT status via UDP on `127.0.0.1:5004` every time PTT state changes
+2. [`web/app.py`](web/app.py) listens for these broadcasts in a background thread and sets a `ptt_active` flag
+3. Both manual relay toggle and automatic band relay switching check this flag before making changes
+4. The web interface visually disables relay buttons (dimmed, `not-allowed` cursor) while PTT is active
+
+**Blocked operations:**
+- Manual relay toggle via web UI buttons
+- Automatic band relay switching when transceiver frequency changes
+- Direct API calls to `/toggle/<n>` (server-side check)
 
 ---
 
