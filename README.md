@@ -16,6 +16,7 @@ Desktop client software: https://github.com/ra0sms/caesar-client-desktop
 - 🔌 **Relay control** via I2C (2×PCF8574T, 16 relays total)
 - 🌐 **Web interface** — relays, TRX, audio, config, status, band relay rules (single UI on port 5050)
 - 🔗 **CAT interface** forwarding over TCP (Icom CI-V and Kenwood protocols)
+- 🔄 **UART1 transparent relay** — CAT data duplicated to physical UART1 port for local computer access
 - 🔒 **Fail-safe** — PTT is forced OFF when client disconnects
 - 🚫 **PTT Lock** — relay switching (manual and band relay) is blocked while PTT is active to prevent accidental antenna switching during transmission
 - 🎛️ **Band Relay Rules** — automatic relay switching based on transceiver frequency
@@ -33,6 +34,7 @@ Desktop client software: https://github.com/ra0sms/caesar-client-desktop
 | Camera | USB webcam on `/dev/video1` |
 | Relay board | 2× I2C GPIO expander at `0x20` / `0x21` |
 | CAT interface | USB-to-Serial on `/dev/ttyCAT` |
+| CAT UART1 relay | Physical UART1 on `/dev/ttyS1` (pins 8-TX, 10-RX) |
 | CON LED | GPIO PC2 (line 66) |
 | PTT output | GPIO PC3 (line 67) |
 | CW Keyer output | GPIO PC1 (line 65) |
@@ -52,6 +54,10 @@ Client PC                          NanoPi NEO (Server)
                     TCP :5050  ←──  Web UI (Flask): relays, TRX, audio, config, status, band relay
                     TCP :8081  ←──  MJPEG video stream
                     TCP :3001  ←──  CAT (Icom CI-V or Kenwood)
+
+Local PC (UART1)                   NanoPi NEO (Server)
+─────────────────────────────────────────────────────────
+                    UART1 (ttyS1) ←→  Transparent CAT relay (bidirectional)
 ```
 
 ### Systemd services
@@ -197,6 +203,37 @@ When PTT is active (transmitting), all relay switching is automatically blocked 
 - Manual relay toggle via web UI buttons
 - Automatic band relay switching when transceiver frequency changes
 - Direct API calls to `/toggle/<n>` (server-side check)
+
+---
+
+### UART1 Transparent CAT Relay
+
+The server can transparently relay all CAT data between the transceiver (connected via USB-to-Serial on `/dev/ttyCAT`) and a local computer connected to the **UART1** physical port (`/dev/ttyS1`, pins 8-TX, 10-RX on NanoPi NEO). This allows two clients to share the same CAT connection simultaneously:
+
+- **Remote client** — connects via TCP port 3001 over the network
+- **Local computer** — connected directly via UART1 (e.g., a PC next to the server)
+
+**How it works:**
+
+1. All data received from the transceiver on `/dev/ttyCAT` is duplicated to both TCP clients and UART1
+2. All data received from UART1 is written back to `/dev/ttyCAT` (and thus forwarded to the transceiver)
+3. All data received from TCP clients is written to `/dev/ttyCAT` (existing behavior)
+
+**Configuration** (in [`web/trx_config.json`](web/trx_config.json) or via web UI Settings tab):
+
+```json
+{
+    "uart1_enabled": true,
+    "uart1_port": "/dev/ttyS1"
+}
+```
+
+The UART1 baudrate is automatically set to match the CAT port baudrate. If UART1 is unavailable (e.g., overlay not enabled), the server logs a warning and continues without it.
+
+**Prerequisite:** UART1 overlay must be enabled in `/boot/armbianEnv.txt`:
+```
+overlays=i2c0 uart1 uart2 uart3 usbhost0 usbhost1 usbhost2 usbhost3 w1-gpio
+```
 
 ---
 

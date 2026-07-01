@@ -57,6 +57,8 @@ default_trx_config = {
     "ctrl_addr": 0xE0,
     "tcp_port": 3001,
     "enabled": True,
+    "uart1_enabled": True,
+    "uart1_port": "/dev/ttyS1",
 }
 
 trx_config = {}
@@ -72,6 +74,7 @@ radio_state = {
 
 # Serial and async components
 ser = None
+ser_uart1 = None
 clients = set()
 decoder = None
 loop = None
@@ -820,10 +823,12 @@ def save_trx_config():
 
 
 def init_serial():
-    global ser, decoder
+    global ser, ser_uart1, decoder
     try:
         if ser and ser.is_open:
             ser.close()
+        if ser_uart1 and ser_uart1.is_open:
+            ser_uart1.close()
 
         ser = serial.Serial(
             trx_config["serial_port"], trx_config["baudrate"], timeout=0.1
@@ -834,6 +839,19 @@ def init_serial():
         else:
             decoder = CIVDecoder()
         radio_state["online"] = True
+
+        # Open UART1 for transparent CAT relay to local computer
+        if trx_config.get("uart1_enabled", True):
+            try:
+                uart1_port = trx_config.get("uart1_port", "/dev/ttyS1")
+                ser_uart1 = serial.Serial(uart1_port, trx_config["baudrate"], timeout=0.1)
+                print(f"[TRX] UART1 relay opened on {uart1_port} at {trx_config['baudrate']} baud")
+            except Exception as e:
+                print(f"[TRX] UART1 relay failed: {e}")
+                ser_uart1 = None
+        else:
+            ser_uart1 = None
+
         return True
     except Exception as e:
         radio_state["online"] = False
@@ -842,18 +860,43 @@ def init_serial():
 
 
 def serial_reader(loop_ref):
-    global ser, decoder
+    global ser, ser_uart1, decoder
     while True:
         if ser and ser.is_open:
             try:
                 data = ser.read(1024)
-                if data and decoder:
-                    decoder.feed(data)
+                if data:
+                    # Decode for web UI
+                    if decoder:
+                        decoder.feed(data)
+                    # Broadcast to TCP clients
                     if loop_ref:
                         asyncio.run_coroutine_threadsafe(broadcast(data), loop_ref)
+                    # Relay to UART1 (local computer)
+                    if ser_uart1 and ser_uart1.is_open:
+                        try:
+                            ser_uart1.write(data)
+                        except Exception as e:
+                            print(f"[TRX] UART1 write error: {e}")
             except Exception as e:
                 print(f"[TRX] Read error: {e}")
                 radio_state["online"] = False
+                time.sleep(1)
+        else:
+            time.sleep(1)
+
+
+def uart1_reader():
+    """Read data from UART1 and write to the CAT serial port (transparent relay)."""
+    global ser, ser_uart1
+    while True:
+        if ser_uart1 and ser_uart1.is_open and ser and ser.is_open:
+            try:
+                data = ser_uart1.read(1024)
+                if data:
+                    ser.write(data)
+            except Exception as e:
+                print(f"[TRX] UART1 read error: {e}")
                 time.sleep(1)
         else:
             time.sleep(1)
@@ -921,6 +964,10 @@ async def start_trx_server():
 
     thread = threading.Thread(target=serial_reader, args=(loop,), daemon=True)
     thread.start()
+
+    # Start UART1 reader thread for transparent relay
+    uart1_thread = threading.Thread(target=uart1_reader, daemon=True)
+    uart1_thread.start()
 
     server = await asyncio.start_server(tcp_client, "0.0.0.0", trx_config["tcp_port"])
 
