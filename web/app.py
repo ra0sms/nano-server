@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 import asyncio
 import glob
 import ipaddress
@@ -1442,7 +1442,9 @@ HTML_TEMPLATE = """
             <div class="settings-column">
                 <h4>Transceiver Settings</h4>
                 <label>Serial Port:</label>
-                <input type="text" id="trx-port" placeholder="/dev/ttyUSB0">
+                <select id="trx-port">
+                    <option value="">-- Scan for ports --</option>
+                </select>
                 <label>Baudrate:</label>
                 <select id="trx-baudrate">
                     <option value="4800">4800</option>
@@ -1760,15 +1762,54 @@ HTML_TEMPLATE = """
         }
 
         function loadTrxConfig() {
-            fetch('/trx/config')
+            // Load available ports
+            fetch('/trx/ports')
                 .then(r => r.json())
-                .then(cfg => {
-                    document.getElementById('trx-port').value = cfg.serial_port;
-                    document.getElementById('trx-baudrate').value = cfg.baudrate;
-                    document.getElementById('trx-protocol').value = cfg.protocol;
-                    document.getElementById('trx-enabled').value = cfg.enabled;
-                    // Format radio_addr as hex string
-                    document.getElementById('trx-radio-addr').value = '0x' + cfg.radio_addr.toString(16).toUpperCase().padStart(2, '0');
+                .then(ports => {
+                    const select = document.getElementById('trx-port');
+                    select.innerHTML = '<option value="">-- Select port --</option>';
+                    ports.forEach(p => {
+                        const opt = document.createElement('option');
+                        opt.value = p;
+                        opt.textContent = p;
+                        select.appendChild(opt);
+                    });
+                    // Now load config and set selected port
+                    fetch('/trx/config')
+                        .then(r => r.json())
+                        .then(cfg => {
+                            // Set port if it exists in the list, otherwise add it as an option
+                            if (ports.includes(cfg.serial_port)) {
+                                select.value = cfg.serial_port;
+                            } else {
+                                const opt = document.createElement('option');
+                                opt.value = cfg.serial_port;
+                                opt.textContent = cfg.serial_port + ' (current)';
+                                opt.selected = true;
+                                select.appendChild(opt);
+                            }
+                            document.getElementById('trx-baudrate').value = cfg.baudrate;
+                            document.getElementById('trx-protocol').value = cfg.protocol;
+                            document.getElementById('trx-enabled').value = cfg.enabled;
+                            document.getElementById('trx-radio-addr').value = '0x' + cfg.radio_addr.toString(16).toUpperCase().padStart(2, '0');
+                        });
+                })
+                .catch(() => {
+                    // Fallback: load config without port list
+                    fetch('/trx/config')
+                        .then(r => r.json())
+                        .then(cfg => {
+                            const select = document.getElementById('trx-port');
+                            const opt = document.createElement('option');
+                            opt.value = cfg.serial_port;
+                            opt.textContent = cfg.serial_port;
+                            opt.selected = true;
+                            select.appendChild(opt);
+                            document.getElementById('trx-baudrate').value = cfg.baudrate;
+                            document.getElementById('trx-protocol').value = cfg.protocol;
+                            document.getElementById('trx-enabled').value = cfg.enabled;
+                            document.getElementById('trx-radio-addr').value = '0x' + cfg.radio_addr.toString(16).toUpperCase().padStart(2, '0');
+                        });
                 });
         }
 
@@ -1791,8 +1832,15 @@ HTML_TEMPLATE = """
                 return;
             }
 
+            // Validate serial port
+            const port = document.getElementById('trx-port').value;
+            if (!port) {
+                showToast('❌ Select a serial port', false);
+                return;
+            }
+
             const data = {
-                serial_port: document.getElementById('trx-port').value,
+                serial_port: port,
                 baudrate: parseInt(document.getElementById('trx-baudrate').value),
                 protocol: document.getElementById('trx-protocol').value,
                 radio_addr: radioAddr,
@@ -2415,6 +2463,24 @@ def trx_state():
             "last_rx": radio_state["last_rx"],
         }
     )
+
+
+@app.route("/trx/ports")
+def trx_ports():
+    """Scan for available serial ports (ttyUSB* and ttyACM*)."""
+    ports = []
+    for pattern in ["/dev/ttyUSB*", "/dev/ttyACM*"]:
+        for p in glob.glob(pattern):
+            ports.append(p)
+    # Also include /dev/ttyCAT if it exists (symlink from fix_usb_ports.sh)
+    if os.path.exists("/dev/ttyCAT"):
+        if "/dev/ttyCAT" not in ports:
+            ports.append("/dev/ttyCAT")
+    # Include /dev/ttyS1 (UART1 on NanoPi)
+    if os.path.exists("/dev/ttyS1"):
+        if "/dev/ttyS1" not in ports:
+            ports.append("/dev/ttyS1")
+    return jsonify(sorted(ports))
 
 
 @app.route("/trx/config", methods=["GET", "POST"])
