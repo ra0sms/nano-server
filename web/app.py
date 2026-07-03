@@ -1441,10 +1441,13 @@ HTML_TEMPLATE = """
         <div class="settings-grid">
             <div class="settings-column">
                 <h4>Transceiver Settings</h4>
-                <label>Serial Port:</label>
-                <select id="trx-port">
+                <label>Serial Port:
+                    <button class="btn-small" onclick="refreshPorts()" style="background:#2d6cdf;color:white;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:12px;margin-left:5px;" title="Scan for available ports">🔄</button>
+                </label>
+                <select id="trx-port" onchange="onPortChange()">
                     <option value="">-- Scan for ports --</option>
                 </select>
+                <button class="btn-small" onclick="reconnectTrx()" style="background:#27ae60;color:white;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;margin-top:4px;" title="Reconnect to the selected port">🔌 Reconnect</button>
                 <label>Baudrate:</label>
                 <select id="trx-baudrate">
                     <option value="4800">4800</option>
@@ -1864,6 +1867,87 @@ HTML_TEMPLATE = """
             saveRelaySettings();
             saveTrxSettings();
             showToast('💾 Saving all settings...', true);
+        }
+
+        // TRX port management functions
+        function refreshPorts() {
+            const select = document.getElementById('trx-port');
+            const currentVal = select.value;
+            select.innerHTML = '<option value="">-- Scanning... --</option>';
+            fetch('/trx/ports')
+                .then(r => r.json())
+                .then(ports => {
+                    select.innerHTML = '<option value="">-- Select port --</option>';
+                    ports.forEach(p => {
+                        const opt = document.createElement('option');
+                        opt.value = p;
+                        opt.textContent = p;
+                        select.appendChild(opt);
+                    });
+                    // Restore previous selection if still available
+                    if (currentVal && ports.includes(currentVal)) {
+                        select.value = currentVal;
+                    }
+                    showToast('🔍 Found ' + ports.length + ' port(s)', true);
+                })
+                .catch(() => {
+                    select.innerHTML = '<option value="">-- Scan failed --</option>';
+                    showToast('❌ Failed to scan ports', false);
+                });
+        }
+
+        function reconnectTrx() {
+            const port = document.getElementById('trx-port').value;
+            if (!port) {
+                showToast('❌ Select a port first', false);
+                return;
+            }
+            showToast('🔄 Reconnecting to ' + port + '...', true);
+            fetch('/trx/reinit', {method: 'POST'})
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === 'ok') {
+                        showToast('✅ Connected to ' + port, true);
+                        loadTrxState();
+                    } else {
+                        showToast('❌ ' + (data.message || 'Connection failed'), false);
+                    }
+                })
+                .catch(() => showToast('❌ Reconnect failed', false));
+        }
+
+        function onPortChange() {
+            const port = document.getElementById('trx-port').value;
+            if (port) {
+                // Auto-save the port change and reconnect
+                const data = {
+                    serial_port: port,
+                    baudrate: parseInt(document.getElementById('trx-baudrate').value),
+                    protocol: document.getElementById('trx-protocol').value,
+                    radio_addr: parseInt(document.getElementById('trx-radio-addr').value.trim(), 16) || 0x70,
+                    enabled: document.getElementById('trx-enabled').value === 'true'
+                };
+                fetch('/trx/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                }).then(r => {
+                    if (r.ok) {
+                        // Now reconnect with the new port
+                        fetch('/trx/reinit', {method: 'POST'})
+                            .then(r => r.json())
+                            .then(result => {
+                                if (result.status === 'ok') {
+                                    showToast('✅ Switched to ' + port, true);
+                                    loadTrxState();
+                                } else {
+                                    showToast('⚠️ Port saved but connection failed: ' + (result.message || ''), false);
+                                }
+                            })
+                            .catch(() => showToast('⚠️ Port saved, reconnect manually', false));
+                    }
+                });
+            }
         }
 
         // Camera functions
@@ -2483,6 +2567,28 @@ def trx_ports():
     return jsonify(sorted(ports))
 
 
+@app.route("/trx/reinit", methods=["POST"])
+def trx_reinit():
+    """Re-initialize the serial connection without restarting the service."""
+    if not auth():
+        return "no auth", 403
+    try:
+        # Close existing connections
+        global ser, ser_uart1
+        if ser and ser.is_open:
+            ser.close()
+        if ser_uart1 and ser_uart1.is_open:
+            ser_uart1.close()
+        # Re-init with current config
+        success = init_serial()
+        if success:
+            return jsonify({"status": "ok", "online": True, "port": trx_config["serial_port"]})
+        else:
+            return jsonify({"status": "error", "online": False, "message": "Failed to open port"}), 500
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route("/trx/config", methods=["GET", "POST"])
 def trx_config_route():
     if not auth():
@@ -2919,6 +3025,27 @@ async def main():
     # Start PTT status listener (UDP broadcast from combined_ptt_service)
     ptt_thread = threading.Thread(target=ptt_status_listener, daemon=True)
     ptt_thread.start()
+
+    # Start auto-reconnect thread for TRX serial port
+    def auto_reconnect():
+        """Periodically check if the serial port is available and reconnect."""
+        while True:
+            time.sleep(5)
+            if not trx_config.get("enabled", True):
+                continue
+            port = trx_config.get("serial_port", "")
+            if not port:
+                continue
+            # If serial is not open but the port device exists, try to reconnect
+            if (not ser or not ser.is_open) and os.path.exists(port):
+                print(f"[TRX] Auto-reconnect: {port} appeared, reinitializing...")
+                init_serial()
+            # If serial is open but port disappeared, mark offline
+            elif ser and ser.is_open and not os.path.exists(port):
+                radio_state["online"] = False
+
+    reconnect_thread = threading.Thread(target=auto_reconnect, daemon=True)
+    reconnect_thread.start()
 
     apply()
 

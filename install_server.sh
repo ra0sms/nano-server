@@ -46,6 +46,7 @@ echo -e "${GREEN}Setting permissions...${NC}"
 usermod -a -G dialout pi || { echo -e "${RED}Failed to modify user groups${NC}"; exit 1; }
 usermod -a -G i2c pi || { echo -e "${RED}Failed to add pi to i2c group${NC}"; exit 1; }
 chmod +x ./network/combined_ptt_service.py
+chmod +x ./web/app.py
 
 # Create config files owned by pi (not root) if they don't exist yet
 echo -e "${GREEN}Creating config files...${NC}"
