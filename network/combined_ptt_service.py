@@ -488,6 +488,8 @@ def cw_send_buffer_thread():
         cw_set(0)
         with cw_send_lock:
             cw_sending = False
+        # Release PTT when CW transmission finishes
+        set_ptt(0)
         print("[CW] ✅ Done sending")
 
 
@@ -502,6 +504,9 @@ def cw_start_sending():
             print("[CW] 📭 Buffer empty, nothing to send")
             return
 
+    # Automatically engage PTT before starting CW transmission
+    set_ptt(1)
+
     cw_send_thread = threading.Thread(target=cw_send_buffer_thread, daemon=True)
     cw_send_thread.start()
 
@@ -512,6 +517,8 @@ def cw_stop_sending():
     with cw_send_lock:
         cw_sending = False
     cw_set(0)
+    # Release PTT when CW is stopped
+    set_ptt(0)
     print("[CW] ⏹️ Stopped")
 
 
@@ -573,13 +580,15 @@ def handle_winkeyer_command(data: bytes, sock: socket.socket, addr: tuple):
             i += 1
 
         elif byte == 0x1C:
-            # PTT on — log only, PTT is handled by the PTT server
-            print("[CW] 📡 PTT ON requested via Winkeyer (use PTT port 5001)")
+            # PTT on via Winkeyer command
+            set_ptt(1)
+            print("[CW] 📡 PTT ON via Winkeyer")
             i += 1
 
         elif byte == 0x1D:
-            # PTT off
-            print("[CW] 📡 PTT OFF requested via Winkeyer (use PTT port 5001)")
+            # PTT off via Winkeyer command
+            set_ptt(0)
+            print("[CW] 📡 PTT OFF via Winkeyer")
             i += 1
 
         elif byte == 0x1F:
@@ -670,6 +679,7 @@ def rpc_sendblended(msg: str) -> bool:
 
 def rpc_tuneon() -> bool:
     """Key down and hold (tune mode)."""
+    set_ptt(1)
     cw_set(1)
     print("[XMLRPC] tuneon")
     return True
@@ -678,6 +688,7 @@ def rpc_tuneon() -> bool:
 def rpc_tuneoff() -> bool:
     """Stop key down (tune mode off)."""
     cw_set(0)
+    set_ptt(0)
     print("[XMLRPC] tuneoff")
     return True
 
