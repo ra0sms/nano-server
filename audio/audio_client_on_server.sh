@@ -11,5 +11,6 @@ rtpopusdepay ! opusdec plc=true ! audioconvert ! \
 audiochebband mode=band-reject lower-frequency=45 upper-frequency=55 poles=4 ! \
 audiocheblimit mode=high-pass cutoff=300 ! \
 audiocheblimit mode=high-pass cutoff=300 ! \
+audiocheblimit mode=low-pass cutoff=2700 ! \
 queue ! audioconvert ! queue ! \
 alsasink device=hw:0 buffer-time=100000 latency-time=1000 sync=false
