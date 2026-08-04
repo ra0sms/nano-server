@@ -45,8 +45,7 @@ echo "  Buffer Time: $BUFFER_TIME us"
 
 gst-launch-1.0 alsasrc device=hw:0 buffer-time=$BUFFER_TIME latency-time=1000 ! \
 audioconvert ! audioresample ! \
-capsfilter caps="audio/x-raw,rate=$RATE,channels=1,format=S16LE" ! \
-audiocheblimit mode=high-pass cutoff=80 ! \
-audioconvert ! \
+audioconvert ! audiocheblimit mode=high-pass cutoff=80 ! \
+audioconvert ! capsfilter caps="audio/x-raw,rate=$RATE,channels=1,format=S16LE" ! \
 opusenc bitrate=48000 bitrate-type=vbr frame-size=20 complexity=2 ! rtpopuspay ! \
 udpsink host=$IP_ADDRESS port=5000 sync=false
