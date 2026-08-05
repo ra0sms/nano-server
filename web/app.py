@@ -743,10 +743,12 @@ class KenwoodDecoder:
             return
         text = text[:-1]  # strip ';'
 
-        # Frequency response: FAxxxxxxxxxx
-        if text.startswith("FA") and len(text) >= 12:
+        # Frequency response: FAxxxxxxxxxxx
+        # Kenwood sends the frequency as 11 digits (first digit is a leading '0'
+        # placeholder), so the actual Hz value is in text[2:13].
+        if text.startswith("FA") and len(text) >= 13:
             try:
-                freq_hz = int(text[2:12])
+                freq_hz = int(text[2:13])
                 if 100000 <= freq_hz <= 3000000000:
                     radio_state["freq"] = freq_hz
                     radio_state["band"] = freq_to_band(freq_hz)
@@ -770,20 +772,20 @@ class KenwoodDecoder:
             mode_digit = text[2]
             radio_state["mode"] = mode_map.get(mode_digit, "Unknown")
 
-        # Combined status: IFxxxxxxxxxxyyyyymzzzz;
-        # xxxxxxxxxx = 10-digit frequency in Hz
+        # Combined status: IFxxxxxxxxxxxyyyyymzzzz;
+        # xxxxxxxxxxx = 11-digit frequency in Hz (first digit is a leading '0')
         # yyyyy = 5-digit mode/status
         # m = mode digit
-        elif text.startswith("IF") and len(text) >= 20:
+        elif text.startswith("IF") and len(text) >= 21:
             try:
-                freq_hz = int(text[2:12])
+                freq_hz = int(text[2:13])
                 if 100000 <= freq_hz <= 3000000000:
                     radio_state["freq"] = freq_hz
                     radio_state["band"] = freq_to_band(freq_hz)
                     set_relays_for_frequency(freq_hz)
             except ValueError:
                 pass
-            if len(text) >= 18:
+            if len(text) >= 19:
                 mode_map = {
                     "1": "LSB",
                     "2": "USB",
@@ -795,7 +797,7 @@ class KenwoodDecoder:
                     "8": "FM",
                     "9": "FM",
                 }
-                mode_digit = text[17]
+                mode_digit = text[18]
                 radio_state["mode"] = mode_map.get(mode_digit, "Unknown")
 
 
