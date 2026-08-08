@@ -942,6 +942,14 @@ async def poller():
             radio_state["online"] = False
             continue
 
+        # When the transparent UART1 relay is enabled, an external program
+        # (flrig/TR4W/etc.) on the PC owns the polling. Our own IF;/CI-V
+        # queries would interleave with its requests and corrupt the response
+        # stream, so the PC cannot display the current frequency. Skip polling
+        # in that case to keep the relay a clean transparent bridge.
+        if trx_config.get("uart1_enabled", True):
+            continue
+
         if time.time() - radio_state["last_rx"] > 5:
             radio_state["online"] = False
 
@@ -1471,6 +1479,11 @@ HTML_TEMPLATE = """
                     <option value="true">Yes</option>
                     <option value="false">No</option>
                 </select>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px;">
+                    <input type="checkbox" id="trx-uart1-enabled" style="width:18px;height:18px;cursor:pointer;">
+                    <span>UART1 transparent relay</span>
+                </label>
+                <div style="font-size:12px;color:#7f8c8d;margin-top:2px;">ttyS1 ↔ transceiver CAT bridge for flrig/TR4W</div>
             </div>
 
             <div class="settings-column">
@@ -1796,6 +1809,7 @@ HTML_TEMPLATE = """
                             document.getElementById('trx-baudrate').value = cfg.baudrate;
                             document.getElementById('trx-protocol').value = cfg.protocol;
                             document.getElementById('trx-enabled').value = cfg.enabled;
+                            document.getElementById('trx-uart1-enabled').checked = cfg.uart1_enabled !== false;
                             document.getElementById('trx-radio-addr').value = '0x' + cfg.radio_addr.toString(16).toUpperCase().padStart(2, '0');
                         });
                 })
@@ -1813,6 +1827,7 @@ HTML_TEMPLATE = """
                             document.getElementById('trx-baudrate').value = cfg.baudrate;
                             document.getElementById('trx-protocol').value = cfg.protocol;
                             document.getElementById('trx-enabled').value = cfg.enabled;
+                            document.getElementById('trx-uart1-enabled').checked = cfg.uart1_enabled !== false;
                             document.getElementById('trx-radio-addr').value = '0x' + cfg.radio_addr.toString(16).toUpperCase().padStart(2, '0');
                         });
                 });
@@ -1849,7 +1864,8 @@ HTML_TEMPLATE = """
                 baudrate: parseInt(document.getElementById('trx-baudrate').value),
                 protocol: document.getElementById('trx-protocol').value,
                 radio_addr: radioAddr,
-                enabled: document.getElementById('trx-enabled').value === 'true'
+                enabled: document.getElementById('trx-enabled').value === 'true',
+                uart1_enabled: document.getElementById('trx-uart1-enabled').checked
             };
 
             fetch('/trx/config', {
@@ -1927,7 +1943,8 @@ HTML_TEMPLATE = """
                     baudrate: parseInt(document.getElementById('trx-baudrate').value),
                     protocol: document.getElementById('trx-protocol').value,
                     radio_addr: parseInt(document.getElementById('trx-radio-addr').value.trim(), 16) || 0x70,
-                    enabled: document.getElementById('trx-enabled').value === 'true'
+                    enabled: document.getElementById('trx-enabled').value === 'true',
+                    uart1_enabled: document.getElementById('trx-uart1-enabled').checked
                 };
                 fetch('/trx/config', {
                     method: 'POST',
@@ -2610,6 +2627,7 @@ def trx_config_route():
     old_port = trx_config["serial_port"]
     old_baud = trx_config["baudrate"]
     old_protocol = trx_config.get("protocol", "Icom")
+    old_uart1 = trx_config.get("uart1_enabled", True)
 
     trx_config.update(data)
     save_trx_config()
@@ -2618,6 +2636,7 @@ def trx_config_route():
         old_port != trx_config["serial_port"]
         or old_baud != trx_config["baudrate"]
         or old_protocol != trx_config.get("protocol", "Icom")
+        or old_uart1 != trx_config.get("uart1_enabled", True)
     ):
         init_serial()
 

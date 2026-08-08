@@ -164,7 +164,7 @@ Default password: `1234` — change it in `web/password.txt`.
 | Audio | Speaker and mic level control via ALSA |
 | Config | IP addresses, audio stream settings, profiles, restart services |
 | Status | Client RTT / connection status, local IP |
-| Settings | Relay names, group modes, TRX serial port and protocol |
+| Settings | Relay names, group modes, TRX serial port and protocol, UART1 transparent relay toggle |
 
 ### Band Relay Rules
 
@@ -229,6 +229,17 @@ The server can transparently relay all CAT data between the transceiver (connect
 ```
 
 The UART1 baudrate is automatically set to match the CAT port baudrate. If UART1 is unavailable (e.g., overlay not enabled), the server logs a warning and continues without it.
+
+**Web UI toggle:** The **Settings → Transceiver Settings** tab now includes a **"UART1 transparent relay"** checkbox. It can be turned on/off directly from the web interface and takes effect immediately (the relay is re-initialized without restarting the service).
+
+**Poller behavior with the relay enabled:**
+
+When the UART1 transparent relay is enabled, the server's **internal CAT poller is automatically disabled**. This is intentional: the external program on the PC (e.g. **flrig**, **TR4W**, **Hamlib**) becomes the sole owner of the CAT bus. Without this, the server's own polling queries would interleave with the PC's requests on the same line and corrupt the response stream, so the PC would not be able to read the current frequency/mode.
+
+- **Relay ON** → internal poller disabled; the PC program reads the transceiver directly, and the web **TRX tab** stays updated passively by decoding the responses that flow through the bridge (the transceiver is polled by the PC program).
+- **Relay OFF** → internal poller enabled; the web interface queries the transceiver itself and updates the TRX tab even when no PC program is connected.
+
+> **Note:** With the relay ON, if no external program is actively polling the transceiver, the web TRX tab will keep the last received value (it no longer sends its own requests).
 
 **Prerequisite:** UART1 overlay must be enabled in `/boot/armbianEnv.txt`:
 ```
