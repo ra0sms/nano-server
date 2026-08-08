@@ -241,6 +241,10 @@ When the UART1 transparent relay is enabled, the server's **internal CAT poller 
 
 > **Note:** With the relay ON, if no external program is actively polling the transceiver, the web TRX tab will keep the last received value (it no longer sends its own requests).
 
+**Stability & auto-recovery:**
+
+All writes to the CAT port are serialized through a single thread lock (`ser_lock`), so the two relay threads (`uart1_reader` and `tcp_client`) and the poller can never interleave their bytes mid-frame and desynchronize the transceiver. Additionally, if the CAT serial port raises a read error (e.g. a temporary USB hiccup or the transceiver is powered off), the server now **automatically closes and reopens the serial ports** with retries instead of silently stalling — so a remote `JTDX`, `flrig`, or `WSJT-X` session no longer needs a full service restart to recover. Manually re-initializing from the web UI (Reconnect button / `POST /trx/reinit`) and re-initializing after a config change are also guarded by the same lock.
+
 **Prerequisite:** UART1 overlay must be enabled in `/boot/armbianEnv.txt`:
 ```
 overlays=i2c0 uart1 uart2 uart3 usbhost0 usbhost1 usbhost2 usbhost3 w1-gpio

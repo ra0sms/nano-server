@@ -79,6 +79,13 @@ clients = set()
 decoder = None
 loop = None
 
+# Serialize writes to the CAT port (ser). pyserial write() is NOT thread-safe:
+# multiple threads (uart1_reader, tcp_client, poller) write to the same port,
+# and interleaved writes can corrupt the CAT frame and desynchronize the
+# transceiver. A single lock prevents mid-byte interleaving and also guards
+# the close+reopen cycle during automatic error recovery.
+ser_lock = threading.Lock()
+
 # ================= RELAY FUNCTIONS =================
 
 
@@ -862,6 +869,10 @@ def init_serial():
 
 
 def serial_reader(loop_ref):
+    """Read data from the CAT port: decode for the web UI, broadcast to TCP
+    clients, and relay to UART1. On a serial error the port is automatically
+    reopened (with retries) so a temporary USB hiccup or transceiver power-off
+    does not require a full service restart."""
     global ser, ser_uart1, decoder
     while True:
         if ser and ser.is_open:
@@ -883,7 +894,19 @@ def serial_reader(loop_ref):
             except Exception as e:
                 print(f"[TRX] Read error: {e}")
                 radio_state["online"] = False
+                # Try to reopen the serial ports after a short delay.
                 time.sleep(1)
+                with ser_lock:
+                    try:
+                        if ser and ser.is_open:
+                            ser.close()
+                        if ser_uart1 and ser_uart1.is_open:
+                            ser_uart1.close()
+                    except Exception:
+                        pass
+                    if not init_serial():
+                        print("[TRX] Auto-reconnect failed; will retry in 5s")
+                        time.sleep(5)
         else:
             time.sleep(1)
 
@@ -896,7 +919,8 @@ def uart1_reader():
             try:
                 data = ser_uart1.read(1024)
                 if data:
-                    ser.write(data)
+                    with ser_lock:
+                        ser.write(data)
             except Exception as e:
                 print(f"[TRX] UART1 read error: {e}")
                 time.sleep(1)
@@ -925,7 +949,8 @@ async def tcp_client(reader, writer):
             if not data:
                 break
             if ser and ser.is_open:
-                ser.write(data)
+                with ser_lock:
+                    ser.write(data)
     except:
         pass
     clients.discard(writer)
@@ -963,7 +988,8 @@ async def poller():
                 [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x03, 0xFD]
             )
         try:
-            ser.write(cmd)
+            with ser_lock:
+                ser.write(cmd)
         except:
             pass
 
@@ -2592,14 +2618,15 @@ def trx_reinit():
     if not auth():
         return "no auth", 403
     try:
-        # Close existing connections
         global ser, ser_uart1
-        if ser and ser.is_open:
-            ser.close()
-        if ser_uart1 and ser_uart1.is_open:
-            ser_uart1.close()
-        # Re-init with current config
-        success = init_serial()
+        with ser_lock:
+            # Close existing connections
+            if ser and ser.is_open:
+                ser.close()
+            if ser_uart1 and ser_uart1.is_open:
+                ser_uart1.close()
+            # Re-init with current config
+            success = init_serial()
         if success:
             return jsonify({"status": "ok", "online": True, "port": trx_config["serial_port"]})
         else:
@@ -2638,7 +2665,8 @@ def trx_config_route():
         or old_protocol != trx_config.get("protocol", "Icom")
         or old_uart1 != trx_config.get("uart1_enabled", True)
     ):
-        init_serial()
+        with ser_lock:
+            init_serial()
 
     return "ok"
 
@@ -2672,7 +2700,8 @@ def _send_civ_cmd(payload: bytes, to_addr=None):
         if to_addr is None:
             to_addr = trx_config["radio_addr"]
         frame = bytes([0xFE, 0xFE, to_addr, trx_config["ctrl_addr"]]) + payload + bytes([0xFD])
-        ser.write(frame)
+        with ser_lock:
+            ser.write(frame)
         return True
     except Exception as e:
         print(f"[TRX] CIV send error: {e}")
@@ -2684,7 +2713,8 @@ def _send_kenwood_cmd(cmd: str):
     if not ser or not ser.is_open:
         return False
     try:
-        ser.write(cmd.encode("ascii"))
+        with ser_lock:
+            ser.write(cmd.encode("ascii"))
         return True
     except Exception as e:
         print(f"[TRX] Kenwood send error: {e}")
