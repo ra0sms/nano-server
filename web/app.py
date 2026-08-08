@@ -973,6 +973,17 @@ async def poller():
         # stream, so the PC cannot display the current frequency. Skip polling
         # in that case to keep the relay a clean transparent bridge.
         if trx_config.get("uart1_enabled", True):
+            # Still perform a periodic "watchdog" flush of the CAT port's RX
+            # buffer. If an external program (e.g. JTDX) aborts mid-request,
+            # a partial command can stay in the port buffer, which makes the
+            # transceiver reply '?;' repeatedly and breaks the next session.
+            # Clearing stale bytes keeps the transparent bridge healthy so a
+            # restarting program re-syncs cleanly.
+            try:
+                if ser.in_waiting:
+                    ser.reset_input_buffer()
+            except Exception:
+                pass
             continue
 
         if time.time() - radio_state["last_rx"] > 5:
