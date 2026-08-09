@@ -954,6 +954,15 @@ async def tcp_client(reader, writer):
     except:
         pass
     clients.discard(writer)
+    # Clear any stale bytes left in the CAT port buffer when a TCP client
+    # disconnects. If the client aborted mid-request, a partial Kenwood/CI-V
+    # command can remain, making the transceiver reply '?;' and desynchronize
+    # subsequent sessions until the watchdog sweep runs.
+    try:
+        if ser and ser.is_open and ser.in_waiting:
+            ser.reset_input_buffer()
+    except Exception:
+        pass
     writer.close()
     await writer.wait_closed()
 
