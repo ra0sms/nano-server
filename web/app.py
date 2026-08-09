@@ -960,7 +960,10 @@ async def tcp_client(reader, writer):
 
 async def poller():
     while True:
-        await asyncio.sleep(2)
+        # Run frequently: the faster we sweep stale bytes, the sooner a
+        # restarted JTDX session re-syncs. 0.5s is short enough to clear a
+        # stuck partial command quickly, yet cheap in CPU.
+        await asyncio.sleep(0.5)
         if not trx_config.get("enabled", True):
             continue
         if not ser or not ser.is_open:
