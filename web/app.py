@@ -2896,6 +2896,22 @@ def audio_state():
     return jsonify({"speaker": int(speaker), "mic": int(mic_pct)})
 
 
+_ALSA_STATE_FILE = "/var/lib/alsa/asound.state"
+
+
+def alsa_save_state():
+    """Persist current ALSA mixer levels to the state file that
+    alsa_restore.service restores at boot. Called after every level change
+    so Audio IN/OUT settings survive a reboot."""
+    try:
+        subprocess.run(
+            ["alsactl", "store", "-f", _ALSA_STATE_FILE],
+            capture_output=True, timeout=10,
+        )
+    except Exception as e:
+        print(f"[audio] alsactl store failed: {e}")
+
+
 @app.route("/audio/speaker", methods=["POST"])
 def audio_set_speaker():
     if not auth():
@@ -2903,6 +2919,7 @@ def audio_set_speaker():
     data = request.json
     vol = data.get("volume", 50)
     subprocess.run(["amixer", "-c", ALSA_CARD, "set", SPEAKER, f"{vol}%"], timeout=5)
+    alsa_save_state()
     return "ok"
 
 
@@ -2914,6 +2931,7 @@ def audio_set_mic():
     vol = data.get("volume", 50)
     alsa_value = percent_to_alsa(vol)
     subprocess.run(["amixer", "-c", ALSA_CARD, "cset", MIC, str(alsa_value)], timeout=5)
+    alsa_save_state()
     return "ok"
 
 
