@@ -954,15 +954,6 @@ async def tcp_client(reader, writer):
     except:
         pass
     clients.discard(writer)
-    # Clear any stale bytes left in the CAT port buffer when a TCP client
-    # disconnects. If the client aborted mid-request, a partial Kenwood/CI-V
-    # command can remain, making the transceiver reply '?;' and desynchronize
-    # subsequent sessions until the watchdog sweep runs.
-    try:
-        if ser and ser.is_open and ser.in_waiting:
-            ser.reset_input_buffer()
-    except Exception:
-        pass
     writer.close()
     await writer.wait_closed()
 
@@ -984,18 +975,18 @@ async def poller():
         # queries would interleave with its requests and corrupt the response
         # stream, so the PC cannot display the current frequency. Skip polling
         # in that case to keep the relay a clean transparent bridge.
+        # When the transparent UART1 relay is enabled, this poller must NOT
+        # touch /dev/ttyCAT at all. The CAT stream belongs exclusively to the
+        # external program (JTDX/flrig/TR4W) talking through ttyS1, and the
+        # serial_reader()/uart1_reader() threads carry it transparently.
+        #
+        # IMPORTANT: the old "watchdog" here called ser.reset_input_buffer()
+        # every 0.5s. That was a race with serial_reader() and could silently
+        # discard a legitimate transceiver response before it reached JTDX,
+        # which looks exactly like an intermittent CAT disconnect and later
+        # produces a stream of '?;' from the transceiver. A true transparent
+        # bridge must not flush or inject anything into the CAT port.
         if trx_config.get("uart1_enabled", True):
-            # Still perform a periodic "watchdog" flush of the CAT port's RX
-            # buffer. If an external program (e.g. JTDX) aborts mid-request,
-            # a partial command can stay in the port buffer, which makes the
-            # transceiver reply '?;' repeatedly and breaks the next session.
-            # Clearing stale bytes keeps the transparent bridge healthy so a
-            # restarting program re-syncs cleanly.
-            try:
-                if ser.in_waiting:
-                    ser.reset_input_buffer()
-            except Exception:
-                pass
             continue
 
         if time.time() - radio_state["last_rx"] > 5:
