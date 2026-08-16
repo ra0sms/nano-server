@@ -272,7 +272,9 @@ def set_relays_for_frequency(freq_hz):
 # ================= AUDIO & NETWORK CONFIG =================
 
 # Audio/network paths (from web_config_server.py)
-PROJECT_DIR = "/home/pi/nano-server"
+# Derive the project root from this file's own location so paths stay correct
+# regardless of where the repo is installed (e.g. /home/pi/nano-server).
+PROJECT_DIR = str(Path(__file__).resolve().parent.parent)
 SERVER_IP_FILE = os.path.join(PROJECT_DIR, "server_ip.cfg")
 CLIENT_IP_FILE = os.path.join(PROJECT_DIR, "client_ip.cfg")
 AUDIO_CONFIG_FILE = os.path.join(PROJECT_DIR, "audio/audio_config.cfg")
@@ -298,6 +300,10 @@ status_lock = threading.Lock()
 # Ensure profiles directory exists
 if not os.path.exists(PROFILES_DIR):
     os.makedirs(PROFILES_DIR)
+# Ensure the profiles directory and its contents are writable by the process
+if not os.access(PROFILES_DIR, os.W_OK):
+    print(f"WARNING: {PROFILES_DIR} is not writable — profile save/delete will fail.")
+    print("Fix: sudo chown -R pi:pi /home/pi/nano-server && sudo chmod -R u+rw /home/pi/nano-server")
 
 # Audio ALSA controls — auto-detected
 
@@ -580,8 +586,12 @@ def save_profile(name):
     rate, buffer_time = read_audio_config()
     content = f"[Server]\nIP={server_ip}\n\n[Client]\nIP={client_ip}\n\n[Audio]\nRate={rate}\nLatency={buffer_time}\n"
     try:
-        with open(path, "w") as f:
+        # Atomic write: write to a temp file in the same directory, then replace.
+        # This avoids partial writes and matches the pattern used elsewhere.
+        tmp = os.path.join(PROFILES_DIR, f".{name}.cfg.tmp")
+        with open(tmp, "w") as f:
             f.write(content)
+        os.replace(tmp, path)
         return True, "Profile saved successfully!"
     except Exception as e:
         return False, f"Error saving profile: {str(e)}"

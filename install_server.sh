@@ -66,6 +66,13 @@ if [ ! -f ./web/password.txt ]; then
   echo -e "${GREEN}Created web/password.txt with default password '1234'. Change it after install.${NC}"
 fi
 
+# Ensure the whole project tree (including the profiles dir) is owned by pi
+# so the web panel (running as pi) can read/write config and profile files.
+if [ ! -d ./profiles ]; then
+  sudo -u pi mkdir -p ./profiles
+fi
+chown -R pi:pi .
+
 echo -e "${GREEN}Setting hostname...${NC}"
 hostnamectl set-hostname nano-server-2 || { echo -e "${RED}Failed to set hostname${NC}"; exit 1; }
 
