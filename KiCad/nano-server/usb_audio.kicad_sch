@@ -4,6 +4,10 @@
 	(generator_version "10.0")
 	(uuid "fef31222-d4ae-44d4-8193-f918cb664526")
 	(paper "A4")
+	(title_block
+		(title "USB Audio")
+		(date "2026-08-18")
+	)
 	(lib_symbols
 		(symbol "CM108B:CM108B"
 			(pin_names
@@ -4895,7 +4899,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "470"
+		(property "Value" "10"
 			(at 153.67 82.55 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7802,7 +7806,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "470"
+		(property "Value" "10"
 			(at 153.67 87.63 90)
 			(show_name no)
 			(do_not_autoplace no)

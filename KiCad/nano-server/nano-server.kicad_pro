@@ -677,13 +677,13 @@
         "uuid": "43147b8a-8249-47c7-a78c-e76b3f19f86f"
       }
     ],
-    "used_designators": "",
+    "used_designators": "C15-17,C33,#PWR38-39,#PWR152-153,U16",
     "variants": []
   },
   "sheets": [
     [
       "43147b8a-8249-47c7-a78c-e76b3f19f86f",
-      "caesar_nanopi"
+      "nano-server"
     ],
     [
       "b91d379c-a24c-44c7-9a7b-e6f87b61a8ee",
