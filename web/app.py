@@ -1,10 +1,12 @@
 #!/usr/bin/python3
 import asyncio
 import glob
+import hmac
 import ipaddress
 import json
 import os
 import re
+import secrets
 import socket
 import subprocess
 import threading
@@ -27,7 +29,21 @@ from smbus2 import SMBus
 
 # ================= CONFIGURATION =================
 app = Flask(__name__)
-app.secret_key = "nano_secret_123"
+
+# Secret key used to sign the session cookie. A hardcoded key baked into
+# the source would let anyone who reads the code forge a valid "auth"
+# session cookie and bypass /login entirely, so it's generated once and
+# persisted next to password.txt instead.
+_SECRET_KEY_FILE = Path(__file__).with_name("secret_key.txt")
+if _SECRET_KEY_FILE.exists():
+    app.secret_key = _SECRET_KEY_FILE.read_text().strip()
+else:
+    app.secret_key = secrets.token_hex(32)
+    _SECRET_KEY_FILE.write_text(app.secret_key)
+    try:
+        os.chmod(_SECRET_KEY_FILE, 0o600)
+    except Exception:
+        pass
 
 # Password
 _PASSWORD_FILE = Path(__file__).with_name("password.txt")
@@ -177,23 +193,30 @@ def save_relay_config():
     os.replace(tmp, CONFIG_FILE)
 
 
+# ================= AMATEUR BAND DEFINITIONS =================
+# Single source of truth for band ranges: used by the default band relay
+# rules, freq_to_band() and the TRX "set band" control, so they can't drift
+# out of sync with each other.
+# Each entry: (from_khz, to_khz, name, default_target_freq_hz)
+AMATEUR_BANDS = [
+    (1800, 2000, "160m", 1840000),
+    (3500, 3800, "80m", 3573000),
+    (7000, 7200, "40m", 7074000),
+    (10100, 10150, "30m", 10136000),
+    (14000, 14350, "20m", 14074000),
+    (18068, 18168, "17m", 18100000),
+    (21000, 21450, "15m", 21074000),
+    (24890, 24990, "12m", 24915000),
+    (28000, 29700, "10m", 28074000),
+    (50000, 54000, "6m", 50313000),
+]
+
 # ================= BAND RELAY RULES =================
 
 BAND_RULES_FILE = Path(__file__).with_name("band_rules.json")
 
 # Default rules: one per amateur band
-default_band_rules = [
-    {"from": 1800, "to": 2000, "relays": []},
-    {"from": 3500, "to": 3800, "relays": []},
-    {"from": 7000, "to": 7200, "relays": []},
-    {"from": 10100, "to": 10150, "relays": []},
-    {"from": 14000, "to": 14350, "relays": []},
-    {"from": 18068, "to": 18168, "relays": []},
-    {"from": 21000, "to": 21450, "relays": []},
-    {"from": 24890, "to": 24990, "relays": []},
-    {"from": 28000, "to": 29700, "relays": []},
-    {"from": 50000, "to": 54000, "relays": []},
-]
+default_band_rules = [{"from": f, "to": t, "relays": []} for f, t, _, _ in AMATEUR_BANDS]
 
 band_rules = []
 band_relay_enabled = True  # Global toggle for automatic relay switching
@@ -577,8 +600,16 @@ def get_profiles_list():
     return sorted(names)
 
 
+def _is_valid_profile_name(name):
+    """Names come from the client and are used to build filesystem paths
+    (see save/load/delete_profile below), so every path must be rejected
+    here first, not just at save time — otherwise a name like '../../etc/x'
+    can escape PROFILES_DIR when loading or deleting a profile."""
+    return bool(name) and name.replace("_", "").isalnum()
+
+
 def save_profile(name):
-    if not name or not name.replace("_", "").isalnum():
+    if not _is_valid_profile_name(name):
         return False, "Invalid profile name (use letters and numbers only)"
     path = os.path.join(PROFILES_DIR, f"{name}.cfg")
     server_ip = read_config_file(SERVER_IP_FILE)
@@ -598,6 +629,8 @@ def save_profile(name):
 
 
 def load_profile(name):
+    if not _is_valid_profile_name(name):
+        return False, "Invalid profile name"
     path = os.path.join(PROFILES_DIR, f"{name}.cfg")
     if not os.path.exists(path):
         return False, "Profile not found"
@@ -633,6 +666,8 @@ def load_profile(name):
 
 
 def delete_profile(name):
+    if not _is_valid_profile_name(name):
+        return False, "Invalid profile name"
     path = os.path.join(PROFILES_DIR, f"{name}.cfg")
     if os.path.exists(path):
         os.remove(path)
@@ -644,20 +679,9 @@ def delete_profile(name):
 
 
 def freq_to_band(freq):
-    bands = [
-        (1800000, 2000000, "160m"),
-        (3500000, 3800000, "80m"),
-        (7000000, 7200000, "40m"),
-        (10100000, 10150000, "30m"),
-        (14000000, 14350000, "20m"),
-        (18068000, 18168000, "17m"),
-        (21000000, 21450000, "15m"),
-        (24890000, 24990000, "12m"),
-        (28000000, 29700000, "10m"),
-        (50000000, 54000000, "6m"),
-    ]
-    for start, end, name in bands:
-        if start <= freq <= end:
+    freq_khz = freq / 1000
+    for start_khz, end_khz, name, _ in AMATEUR_BANDS:
+        if start_khz <= freq_khz <= end_khz:
             return name
     return "Unknown"
 
@@ -726,6 +750,22 @@ class CIVDecoder:
 
 
 
+
+# Per the Kenwood PC control command reference (MD command): 0 and 8 are
+# both "None (setting failure)" (not real modes, so intentionally absent
+# here — .get() below falls back to "Unknown"), and 9 is FSK-R, not FM.
+KENWOOD_MODE_MAP = {
+    "1": "LSB",
+    "2": "USB",
+    "3": "CW",
+    "4": "FM",
+    "5": "AM",
+    "6": "RTTY",
+    "7": "CW",
+    "9": "RTTY",
+}
+
+
 class KenwoodDecoder:
     """Decoder for Kenwood CAT protocol (ASCII-based, terminated by ';')."""
 
@@ -761,8 +801,8 @@ class KenwoodDecoder:
         text = text[:-1]  # strip ';'
 
         # Frequency response: FAxxxxxxxxxxx
-        # Kenwood sends the frequency as 11 digits (first digit is a leading '0'
-        # placeholder), so the actual Hz value is in text[2:13].
+        # Kenwood sends the frequency as an 11-digit, zero-padded Hz value
+        # (e.g. 14.074 MHz -> "00014074000"), i.e. text[2:13].
         if text.startswith("FA") and len(text) >= 13:
             try:
                 freq_hz = int(text[2:13])
@@ -775,25 +815,14 @@ class KenwoodDecoder:
 
         # Mode response: MDx
         elif text.startswith("MD") and len(text) >= 3:
-            mode_map = {
-                "1": "LSB",
-                "2": "USB",
-                "3": "CW",
-                "4": "FM",
-                "5": "AM",
-                "6": "RTTY",
-                "7": "CW",
-                "8": "FM",
-                "9": "FM",
-            }
             mode_digit = text[2]
-            radio_state["mode"] = mode_map.get(mode_digit, "Unknown")
+            radio_state["mode"] = KENWOOD_MODE_MAP.get(mode_digit, "Unknown")
 
-        # Combined status: IFxxxxxxxxxxxyyyyymzzzz;
-        # xxxxxxxxxxx = 11-digit frequency in Hz (first digit is a leading '0')
-        # yyyyy = 5-digit mode/status
-        # m = mode digit
-        elif text.startswith("IF") and len(text) >= 21:
+        # Combined status: IF<freq:11><space:5><RIT/XIT freq:5><RIT:1><XIT:1>
+        # <ch bank:1><ch num:2><TX/RX:1><mode:1>... (Kenwood PC control command
+        # reference, "IF" command) — the mode digit is P9, at offset 29, not 18
+        # (18 is the sign character of the RIT/XIT offset field).
+        elif text.startswith("IF") and len(text) >= 13:
             try:
                 freq_hz = int(text[2:13])
                 if 100000 <= freq_hz <= 3000000000:
@@ -802,20 +831,9 @@ class KenwoodDecoder:
                     set_relays_for_frequency(freq_hz)
             except ValueError:
                 pass
-            if len(text) >= 19:
-                mode_map = {
-                    "1": "LSB",
-                    "2": "USB",
-                    "3": "CW",
-                    "4": "FM",
-                    "5": "AM",
-                    "6": "RTTY",
-                    "7": "CW",
-                    "8": "FM",
-                    "9": "FM",
-                }
-                mode_digit = text[18]
-                radio_state["mode"] = mode_map.get(mode_digit, "Unknown")
+            if len(text) >= 30:
+                mode_digit = text[29]
+                radio_state["mode"] = KENWOOD_MODE_MAP.get(mode_digit, "Unknown")
 
 
 def load_trx_config():
@@ -1038,6 +1056,36 @@ async def start_trx_server():
 
 # ================= AUTH =================
 
+# Simple in-memory login rate limiting: after LOGIN_MAX_ATTEMPTS failed
+# attempts from the same IP, block further attempts from it for
+# LOGIN_LOCKOUT_SECONDS. This is a basic guard against online brute-forcing
+# of the panel password (which is often short and numeric).
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_LOCKOUT_SECONDS = 60
+_login_attempts = {}
+_login_attempts_lock = threading.Lock()
+
+
+def _login_locked_out(ip):
+    with _login_attempts_lock:
+        entry = _login_attempts.get(ip)
+        return bool(entry and entry["locked_until"] > time.time())
+
+
+def _record_login_failure(ip):
+    with _login_attempts_lock:
+        entry = _login_attempts.setdefault(ip, {"count": 0, "locked_until": 0})
+        entry["count"] += 1
+        if entry["count"] >= LOGIN_MAX_ATTEMPTS:
+            entry["locked_until"] = time.time() + LOGIN_LOCKOUT_SECONDS
+            entry["count"] = 0
+
+
+def _record_login_success(ip):
+    with _login_attempts_lock:
+        _login_attempts.pop(ip, None)
+
+
 LOGIN_HTML = """
 <!doctype html>
 <html>
@@ -1064,9 +1112,14 @@ input, button { font-size:18px; padding:10px; margin:5px; }
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        if request.form.get("password") == PASSWORD:
+        ip = request.remote_addr
+        if _login_locked_out(ip):
+            return f"Too many attempts. Try again in {LOGIN_LOCKOUT_SECONDS} seconds.", 429
+        if hmac.compare_digest(request.form.get("password", "").encode(), PASSWORD.encode()):
             session["auth"] = True
+            _record_login_success(ip)
             return redirect("/")
+        _record_login_failure(ip)
         return "Wrong password"
     return LOGIN_HTML
 
@@ -2515,6 +2568,8 @@ def state():
 def toggle(n):
     if not auth():
         return jsonify({"error": "no auth"})
+    if n < 0 or n > 15:
+        return jsonify({"error": "invalid relay index"}), 400
     toggle_relay(n)
     apply()
     return jsonify(
@@ -2697,20 +2752,6 @@ def trx_config_route():
 
 # ================= TRX CONTROL API =================
 
-# Amateur band definitions (Hz)
-# Each entry: (from_khz, to_khz, name, target_freq_hz)
-AMATEUR_BANDS = [
-    (1800, 2000, "160m", 1840000),
-    (3500, 3800, "80m", 3573000),
-    (7000, 7200, "40m", 7074000),
-    (10100, 10150, "30m", 10136000),
-    (14000, 14350, "20m", 14074000),
-    (18068, 18168, "17m", 18100000),
-    (21000, 21450, "15m", 21074000),
-    (24890, 24990, "12m", 24915000),
-    (28000, 29700, "10m", 28074000),
-    (50000, 54000, "6m", 50313000),
-]
 
 def _send_civ_cmd(payload: bytes, to_addr=None):
     """Send a CI-V command frame and return True if sent successfully.
@@ -2749,6 +2790,33 @@ def _is_kenwood():
     return trx_config.get("protocol", "Icom") == "Kenwood"
 
 
+def _freq_to_civ_bcd(freq_hz):
+    """Encode a frequency in Hz as the 5-byte BCD payload used by Icom CI-V
+    'set frequency' commands (least-significant digit pair first)."""
+    bcd = bytearray(5)
+    temp = freq_hz
+    for i in range(5):
+        low = temp % 10
+        temp //= 10
+        high = temp % 10
+        temp //= 10
+        bcd[i] = (high << 4) | low
+    return bytes(bcd)
+
+
+def _set_transceiver_freq(freq_hz):
+    """Send a 'set frequency' command to the transceiver (in the configured
+    protocol) and update radio_state accordingly."""
+    if _is_kenwood():
+        _send_kenwood_cmd(f"FA{freq_hz:011d};")
+    else:
+        # Icom CI-V: set frequency command 0x05
+        _send_civ_cmd(bytes([0x05]) + _freq_to_civ_bcd(freq_hz))
+
+    radio_state["freq"] = freq_hz
+    radio_state["band"] = freq_to_band(freq_hz)
+
+
 @app.route("/trx/set_freq", methods=["POST"])
 def trx_set_freq():
     """Set transceiver frequency (Hz)."""
@@ -2759,24 +2827,7 @@ def trx_set_freq():
     if freq_hz < 100000 or freq_hz > 3000000000:
         return "Invalid frequency", 400
 
-    if _is_kenwood():
-        cmd = f"FA{freq_hz:011d};"
-        _send_kenwood_cmd(cmd)
-    else:
-        # Icom CI-V: set frequency command 0x05
-        bcd = bytearray(5)
-        temp = freq_hz
-        for i in range(5):
-            low = temp % 10
-            temp //= 10
-            high = temp % 10
-            temp //= 10
-            bcd[i] = (high << 4) | low
-        cmd = bytes([0x05]) + bytes(bcd)
-        _send_civ_cmd(cmd)
-
-    radio_state["freq"] = freq_hz
-    radio_state["band"] = freq_to_band(freq_hz)
+    _set_transceiver_freq(freq_hz)
     return jsonify({"freq": freq_hz, "band": radio_state["band"]})
 
 
@@ -2794,24 +2845,7 @@ def trx_freq_step():
     # Clamp to valid range
     new_freq = max(100000, min(3000000000, new_freq))
 
-    # Send the new frequency to the radio
-    if _is_kenwood():
-        cmd = f"FA{new_freq:011d};"
-        _send_kenwood_cmd(cmd)
-    else:
-        bcd = bytearray(5)
-        temp = new_freq
-        for i in range(5):
-            low = temp % 10
-            temp //= 10
-            high = temp % 10
-            temp //= 10
-            bcd[i] = (high << 4) | low
-        cmd = bytes([0x05]) + bytes(bcd)
-        _send_civ_cmd(cmd)
-
-    radio_state["freq"] = new_freq
-    radio_state["band"] = freq_to_band(new_freq)
+    _set_transceiver_freq(new_freq)
     return jsonify({"freq": new_freq, "band": radio_state["band"]})
 
 
@@ -2825,23 +2859,9 @@ def trx_set_band():
 
     for start, end, name, target_freq in AMATEUR_BANDS:
         if name == band_name:
-            # Send frequency
-            if _is_kenwood():
-                cmd = f"FA{target_freq:011d};"
-                _send_kenwood_cmd(cmd)
-            else:
-                bcd = bytearray(5)
-                temp = target_freq
-                for i in range(5):
-                    low = temp % 10
-                    temp //= 10
-                    high = temp % 10
-                    temp //= 10
-                    bcd[i] = (high << 4) | low
-                cmd = bytes([0x05]) + bytes(bcd)
-                _send_civ_cmd(cmd)
-
-            radio_state["freq"] = target_freq
+            _set_transceiver_freq(target_freq)
+            # Use the canonical band name rather than freq_to_band()'s lookup,
+            # matching prior behavior exactly.
             radio_state["band"] = band_name
             return jsonify({"freq": target_freq, "band": band_name})
 
@@ -2881,8 +2901,12 @@ def trx_set_af_gain():
     gain = max(0, min(100, int(gain)))
 
     if _is_kenwood():
-        # Kenwood: AG command
-        _send_kenwood_cmd(f"AG{gain:03d};")
+        # Kenwood AG command: "AG" + P1(1 digit, always 0) + P2(3-digit
+        # level, 000-255) — sending our 0-100% value as the 3-digit P2
+        # directly (with no P1 digit) both breaks the frame length the
+        # radio expects and caps the audible range at ~100/255 (~39%).
+        level_255 = round(gain * 255 / 100)
+        _send_kenwood_cmd(f"AG0{level_255:03d};")
     else:
         # Icom CI-V: AF gain command 0x14 with sub-command 0x01
         gain_byte = max(0, min(255, int(gain * 255 / 100)))
@@ -3037,7 +3061,7 @@ def config_delete_profile():
 def config_restart_services():
     if not auth():
         return "no auth", 403
-    script_path = "/home/pi/nano-server/restart_services_on_server.sh"
+    script_path = os.path.join(PROJECT_DIR, "restart_services_on_server.sh")
     try:
         subprocess.run(["sudo", script_path], timeout=30, check=True)
         return "ok"

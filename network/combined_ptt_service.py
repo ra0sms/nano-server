@@ -16,7 +16,7 @@ UDP ports:
   - 5003 — Winkeyer CW Keyer protocol
 
 XML-RPC (compatible with PyWinKeyerSerial by K6GTE):
-  - 8000 — k1elsendstring, setspeed, sendblended, tuneon/tuneoff, clearbuffer
+  - 6789 — k1elsendstring, setspeed, sendblended, tuneon/tuneoff, clearbuffer
 """
 
 import os
@@ -57,6 +57,14 @@ MAGIC_PHRASE = b"PING_RESPONSE"
 PTT_KEEPALIVE_TIMEOUT = 0.5   # 500 ms — force PTT off if no packet received
 PTT_KEEPALIVE_CHECK_INTERVAL = 0.1  # 100 ms — check loop granularity
 
+# === Tune-mode watchdog ===
+# The Winkeyer 0x1C command and the XML-RPC tuneon() call hold PTT/key down
+# indefinitely until an explicit off command (0x1D / tuneoff()), with no
+# renewal packets like the port-5001 keepalive protocol has. If the client
+# that engaged tune mode disappears without releasing it, this caps how
+# long the transmitter can be held keyed.
+TUNE_MAX_HOLD_SECONDS = 60
+
 # === PTT Status Broadcast (to web panel) ===
 PTT_STATUS_PORT = 5004  # UDP port for broadcasting PTT status to web panel on localhost
 
@@ -77,6 +85,11 @@ ptt_keepalive_last = 0.0       # timestamp of last received PTT packet (monotoni
 ptt_keepalive_active = False   # True when we've received a "1" with keepalive flag
 ptt_last_seq = 0               # last seen sequence number (for gap detection)
 ptt_seq_gap_detected = False   # set True when a seq gap is found
+
+# Tune-mode watchdog tracking: monotonic timestamp of when Winkeyer 0x1C /
+# rpc_tuneon() last engaged PTT, or None when not in tune mode. Cleared
+# whenever PTT turns off through any path (see set_ptt()).
+tune_hold_start = None
 
 # CW state
 wpm = WPM_DEFAULT
@@ -141,9 +154,11 @@ def broadcast_ptt_status(value: int):
 
 def set_ptt(value: int):
     """Thread-safe PTT update with hardware write"""
-    global ptt_state
+    global ptt_state, tune_hold_start
     if value not in (0, 1):
         return
+    if value == 0:
+        tune_hold_start = None
     if value != ptt_state:
         try:
             gpio_request.set_value(LINE_PTT, Value.ACTIVE if value else Value.INACTIVE)
@@ -299,6 +314,14 @@ def client_monitor():
     prev_online = False
 
     while not shutdown_flag.is_set():
+        # Tune-mode watchdog: Winkeyer 0x1C / rpc_tuneon() hold PTT and the
+        # key down indefinitely with no renewal packets, unlike the port-5001
+        # keepalive protocol. Force them off if held past TUNE_MAX_HOLD_SECONDS.
+        if tune_hold_start is not None and time.monotonic() - tune_hold_start > TUNE_MAX_HOLD_SECONDS:
+            print(f"⏰ Tune-mode watchdog: PTT held > {TUNE_MAX_HOLD_SECONDS}s — forcing PTT/key OFF")
+            set_ptt(0)
+            cw_set(0)
+
         online = send_ping(client_ip) if client_ip != "0.0.0.0" else True
 
         if online:
@@ -353,11 +376,6 @@ def cw_set(value: int):
 def dit_ms():
     """Duration of a dit in milliseconds."""
     return max(10, int(1200 / wpm))
-
-
-def dah_ms():
-    """Duration of a dah in milliseconds."""
-    return max(30, int(3 * 1200 / wpm))
 
 
 # Morse code table: ASCII char -> (bits, length)
@@ -434,7 +452,11 @@ def char_to_cw_bits(char: str):
 def send_char(char: str):
     """Send a single character as CW, blocking."""
     if char == " ":
-        time.sleep(dit_ms() * 7 / 1000)
+        # Standard word gap is 7 dits total. The previous character already
+        # left the key up for a 3-dit inter-character gap (below), so only
+        # 4 more dits are needed here — sleeping the full 7 would stack on
+        # top of that and produce a 10-dit gap instead.
+        time.sleep(dit_ms() * 4 / 1000)
         return False
 
     morse = char_to_cw_bits(char)
@@ -443,7 +465,6 @@ def send_char(char: str):
 
     bits, length = morse
     dit = dit_ms()
-    dah = dah_ms()
 
     for i in range(length):
         if shutdown_flag.is_set():
@@ -533,7 +554,7 @@ def cw_clear_buffer():
 
 def handle_winkeyer_command(data: bytes, sock: socket.socket, addr: tuple):
     """Process a Winkeyer protocol datagram."""
-    global wpm, cw_buffer
+    global wpm, cw_buffer, tune_hold_start
 
     i = 0
     while i < len(data):
@@ -582,6 +603,7 @@ def handle_winkeyer_command(data: bytes, sock: socket.socket, addr: tuple):
         elif byte == 0x1C:
             # PTT on via Winkeyer command
             set_ptt(1)
+            tune_hold_start = time.monotonic()
             print("[CW] 📡 PTT ON via Winkeyer")
             i += 1
 
@@ -634,6 +656,10 @@ def winkeyer_server():
             try:
                 sock.settimeout(0.5)
                 data, addr = sock.recvfrom(1024)
+                sender_ip, _ = addr
+                if sender_ip != client_ip:
+                    print(f"[CW] 🔒 Ignored Winkeyer command from unauthorized IP: {sender_ip}")
+                    continue
                 if data:
                     handle_winkeyer_command(data, sock, addr)
             except socket.timeout:
@@ -647,7 +673,7 @@ def winkeyer_server():
 
 # ================= XML-RPC (PyWinKeyerSerial compatible) =================
 # Programs like N1MM, DXLog, etc. connect via XML-RPC to send CW.
-# Compatible with the K6GTE PyWinKeyerSerial XML-RPC interface on port 8000.
+# Compatible with the K6GTE PyWinKeyerSerial XML-RPC interface on port 6789.
 
 
 def rpc_k1elsendstring(text: str) -> bool:
@@ -679,8 +705,10 @@ def rpc_sendblended(msg: str) -> bool:
 
 def rpc_tuneon() -> bool:
     """Key down and hold (tune mode)."""
+    global tune_hold_start
     set_ptt(1)
     cw_set(1)
+    tune_hold_start = time.monotonic()
     print("[XMLRPC] tuneon")
     return True
 
@@ -701,12 +729,20 @@ def rpc_clearbuffer() -> bool:
 
 
 def xmlrpc_server():
-    """XML-RPC server compatible with PyWinKeyerSerial on port 8000."""
+    """XML-RPC server compatible with PyWinKeyerSerial on port 6789."""
     class RequestHandler(SimpleXMLRPCRequestHandler):
         rpc_paths = ("/RPC2",)
 
+    class AuthorizedXMLRPCServer(SimpleXMLRPCServer):
+        def verify_request(self, request, client_address):
+            sender_ip = client_address[0]
+            if sender_ip != client_ip:
+                print(f"[XMLRPC] 🔒 Rejected connection from unauthorized IP: {sender_ip}")
+                return False
+            return True
+
     try:
-        with SimpleXMLRPCServer(
+        with AuthorizedXMLRPCServer(
             ("0.0.0.0", XMLRPC_PORT),
             requestHandler=RequestHandler,
             allow_none=True,

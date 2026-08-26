@@ -1,6 +1,7 @@
 client_ip.cfg
 server_ip.cfg
 web/password.txt
+web/secret_key.txt
 profiles/*.cfg
 __pycache__/
 *.py[cod]
