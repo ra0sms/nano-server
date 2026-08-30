@@ -1,3 +1,7 @@
+## v1.1.2 (2026-08-30)
+- Update tab now shows the current version immediately on open (via a new local-only /update/current check, no GitHub call), instead of only after clicking Check for Update
+- Render the changelog for an available update as formatted headings and bullet lists per version instead of a raw text block
+
 ## v1.1.1 (2026-08-30)
 - Fix Update tab always refusing to apply an update ("Repository has local changes") because the app's own runtime state files (web/config.json, audio/audio_config.cfg, web/trx_config.json, web/band_rules.json) were tracked or untracked-but-not-ignored, so git always saw them as locally modified. They're now gitignored, and the update flow preserves their live content across a git pull
 

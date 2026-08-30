@@ -1670,7 +1670,7 @@ HTML_TEMPLATE = """
             <button class="save-btn" onclick="checkForUpdate()">Check for Update</button>
             <button class="save-btn danger" id="apply-update-btn" onclick="applyUpdate()" disabled style="background:#d64545;opacity:0.5;">Update</button>
             <div id="update-status-msg" style="margin-top:10px;color:#7f8c8d;"></div>
-            <pre id="update-changelog" style="display:none;margin-top:15px;white-space:pre-wrap;background:#1a1d24;border:1px solid #333;border-radius:8px;padding:15px;max-height:400px;overflow-y:auto;font-family:inherit;"></pre>
+            <div id="update-changelog" style="display:none;margin-top:15px;background:#1a1d24;border:1px solid #333;border-radius:8px;padding:15px;max-height:400px;overflow-y:auto;"></div>
         </div>
         <div class="group">
             <button class="save-btn danger" onclick="restartWebPanel()" style="background:#d64545;">Restart Web Panel</button>
@@ -2351,6 +2351,39 @@ HTML_TEMPLATE = """
         }
 
         // ================= Update functions =================
+        function loadCurrentVersion() {
+            fetch('/update/current')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('update-current-version').textContent = data.current || '—';
+                })
+                .catch(() => {});
+        }
+
+        function escapeHtml(s) {
+            const div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+
+        // Renders "## vX.Y.Z (date)\n- item\n- item" changelog sections as
+        // a heading + bullet list per version, newest first.
+        function renderChangelogHtml(text) {
+            if (!text) return '';
+            return text.split(/\n\n(?=## )/).map(section => {
+                const lines = section.split('\n');
+                const header = lines[0].replace(/^##\\s*/, '');
+                const items = lines.slice(1)
+                    .filter(l => l.trim().startsWith('-'))
+                    .map(l => `<li>${escapeHtml(l.trim().slice(1).trim())}</li>`)
+                    .join('');
+                return `<div style="margin-bottom:14px;">` +
+                    `<h4 style="margin:0 0 6px;color:#2d6cdf;">${escapeHtml(header)}</h4>` +
+                    `<ul style="margin:0;padding-left:20px;">${items}</ul>` +
+                    `</div>`;
+            }).join('');
+        }
+
         function checkForUpdate() {
             const applyBtn = document.getElementById('apply-update-btn');
             const msgEl = document.getElementById('update-status-msg');
@@ -2358,7 +2391,7 @@ HTML_TEMPLATE = """
             applyBtn.disabled = true;
             applyBtn.style.opacity = 0.5;
             changelogEl.style.display = 'none';
-            changelogEl.textContent = '';
+            changelogEl.innerHTML = '';
             msgEl.textContent = 'Checking for updates...';
             fetch('/update/check')
                 .then(r => r.json())
@@ -2372,7 +2405,7 @@ HTML_TEMPLATE = """
                     if (data.update_available) {
                         msgEl.textContent = 'Update available.';
                         if (data.changelog) {
-                            changelogEl.textContent = data.changelog;
+                            changelogEl.innerHTML = renderChangelogHtml(data.changelog);
                             changelogEl.style.display = 'block';
                         }
                         applyBtn.disabled = false;
@@ -2419,6 +2452,7 @@ HTML_TEMPLATE = """
                 if (tabName === 'trx') loadBandRules();
                 if (tabName === 'audio') { loadAudioState(); loadConfig(); }
                 if (tabName === 'config') { loadConfig(); loadLocalIp(); updateConnectionStatus(); }
+                if (tabName === 'update') loadCurrentVersion();
             });
         });
 
@@ -3218,6 +3252,14 @@ def get_changelog_for_new_versions(current_version):
         if v and v > cur_v:
             entries.append(section.strip())
     return "\n\n".join(entries)
+
+
+@app.route("/update/current")
+def update_current():
+    """Local-only version lookup (no network), for showing it as soon as the Update tab opens."""
+    if not auth():
+        return jsonify({}), 403
+    return jsonify({"current": get_current_version()})
 
 
 @app.route("/update/check")
