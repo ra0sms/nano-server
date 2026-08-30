@@ -302,7 +302,6 @@ SERVER_IP_FILE = os.path.join(PROJECT_DIR, "server_ip.cfg")
 CLIENT_IP_FILE = os.path.join(PROJECT_DIR, "client_ip.cfg")
 AUDIO_CONFIG_FILE = os.path.join(PROJECT_DIR, "audio/audio_config.cfg")
 PROFILES_DIR = os.path.join(PROJECT_DIR, "profiles")
-CHANGELOG_FILE = os.path.join(PROJECT_DIR, "CHANGELOG.txt")
 
 # UDP Ping configuration
 UDP_PORT = 5002
@@ -3235,12 +3234,21 @@ def get_latest_tag():
     return tags[-1]
 
 
-def get_changelog_for_new_versions(current_version):
-    """Changelog sections (## vX.Y.Z ...) for versions newer than current_version."""
-    if not os.path.exists(CHANGELOG_FILE):
+def get_changelog_for_new_versions(current_version, latest_tag):
+    """Changelog sections (## vX.Y.Z ...) for versions newer than current_version.
+
+    Reads CHANGELOG.txt as it exists at latest_tag (via `git show`), not the
+    copy on disk: the working tree still reflects whatever commit is
+    currently checked out, so a fetched-but-not-yet-pulled tag's changelog
+    entries wouldn't be visible there yet.
+    """
+    try:
+        r = _run_git(["show", f"{latest_tag}:CHANGELOG.txt"])
+    except subprocess.SubprocessError:
         return ""
-    with open(CHANGELOG_FILE, "r") as f:
-        content = f.read()
+    if r.returncode != 0:
+        return ""
+    content = r.stdout
     cur_v = _parse_version(current_version) or (0, 0, 0)
     sections = re.split(r"(?m)^(?=## v\d+\.\d+\.\d+)", content)
     entries = []
@@ -3274,7 +3282,7 @@ def update_check():
             "error": "Could not reach GitHub or no version tags found.",
         })
     update_available = (_parse_version(latest) or (0, 0, 0)) > (_parse_version(current) or (0, 0, 0))
-    changelog = get_changelog_for_new_versions(current) if update_available else ""
+    changelog = get_changelog_for_new_versions(current, latest) if update_available else ""
     return jsonify({
         "current": current,
         "latest": latest,

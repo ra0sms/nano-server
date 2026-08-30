@@ -1,3 +1,6 @@
+## v1.1.9 (2026-08-30)
+- Fix Check for Update showing no changelog for an available update: it read CHANGELOG.txt from the working tree, which still reflects whatever commit is currently checked out, not the fetched-but-not-yet-pulled latest tag. Now reads the file from the latest tag's own git object instead
+
 ## v1.1.8 (2026-08-30)
 - No code changes — version bump to verify the Update tab's check/apply flow end-to-end
 
