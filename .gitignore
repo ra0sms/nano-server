@@ -6,6 +6,8 @@ web/config.json
 web/trx_config.json
 web/band_rules.json
 audio/audio_config.cfg
+privatekey
+publickey
 profiles/*.cfg
 __pycache__/
 *.py[cod]
