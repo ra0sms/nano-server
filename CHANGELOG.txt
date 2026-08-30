@@ -1,3 +1,6 @@
+## v1.1.6 (2026-08-30)
+- No code changes — version bump to verify the Update tab's check/apply flow end-to-end after the v1.1.5 fix
+
 ## v1.1.5 (2026-08-30)
 - Fix the actual cause of the broken web panel (a bug present since v1.1.2, not v1.1.3 as first suspected): the changelog-rendering JS had literal "\n" sequences written inside app.py's non-raw triple-quoted HTML_TEMPLATE string, so Python's own string parsing turned them into real newline characters before they ever reached the browser, corrupting a JS comment and splitting a string literal across lines ("Uncaught SyntaxError: string literal contains an unescaped line break"), which broke every tab and button on the page. All such sequences are now properly double-escaped
 
