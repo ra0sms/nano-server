@@ -14,13 +14,14 @@ Desktop client software: https://github.com/ra0sms/caesar-client-desktop
 - 📡 **PTT control** via GPIO with client reachability monitoring
 - 📷 **Video streaming** via mjpg-streamer (MJPEG over HTTP)
 - 🔌 **Relay control** via I2C (2×PCF8574T, 16 relays total)
-- 🌐 **Web interface** — relays, TRX, audio, config, status, band relay rules (single UI on port 5050)
+- 🌐 **Web interface** — relays, TRX, band relay rules, audio, config, settings, self-update (single UI on port 5050)
 - 🔗 **CAT interface** forwarding over TCP (Icom CI-V and Kenwood protocols)
 - 🔄 **UART1 transparent relay** — CAT data duplicated to physical UART1 port for local computer access
 - 🔒 **Fail-safe** — PTT is forced OFF when client disconnects
 - 🚫 **PTT Lock** — relay switching (manual and band relay) is blocked while PTT is active to prevent accidental antenna switching during transmission
 - 🎛️ **Band Relay Rules** — automatic relay switching based on transceiver frequency
 - 🔑 **CW Keyer** — Winkeyer protocol over UDP, generates Morse code on GPIO PC1
+- 🔄 **Self-update** — checks GitHub for a newer release tag, shows its changelog, and applies it (`git pull` + restart of all related systemd services) from the web UI
 
 ---
 
@@ -51,7 +52,7 @@ Client PC                          NanoPi NEO (Server)
                     UDP :5001  ──→  PTT commands (0/1)
                     UDP :5002  ←→   Ping / RTT monitoring
                     UDP :5003  ──→  CW Keyer (Winkeyer protocol)
-                    TCP :5050  ←──  Web UI (Flask): relays, TRX, audio, config, status, band relay
+                    TCP :5050  ←──  Web UI (Flask): relays, TRX, band relay, audio, config, settings, update
                     TCP :8081  ←──  MJPEG video stream
                     TCP :3001  ←──  CAT (Icom CI-V or Kenwood)
 
@@ -67,7 +68,7 @@ Local PC (UART1)                   NanoPi NEO (Server)
 | `ptt_server` | PTT + CW Keyer + client monitor + ping responder (single service, all GPIO) |
 | `audio_server` | GStreamer audio TX (server mic → client) |
 | `audio_client_on_server` | GStreamer audio RX (client → server speaker) |
-| `relay-web` | Web UI: relays, TRX, audio, config, status, band relay (port 5050) |
+| `relay-web` | Web UI: relays, TRX, band relay, audio, config, settings, update (port 5050) |
 | `mjpeg-streamer` | MJPEG video stream from USB camera |
 | `alsa_restore` | Restores ALSA mixer state at boot |
 
@@ -96,7 +97,7 @@ The script will:
 - Create `client_ip.cfg`, `server_ip.cfg`, and `web/password.txt` with defaults
 - Configure hardware overlays in `/boot/armbianEnv.txt`
 - Register and start all systemd services
-- Add sudoers entries for `restart_services_on_server.sh` and `systemctl restart relay-web`
+- Add sudoers entries for `restart_services_on_server.sh`, `systemctl restart/stop/start relay-web`, and `alsactl store` (so Audio tab volume changes persist across reboot)
 
 ### 4. Set IP addresses
 
@@ -159,12 +160,11 @@ Default password: `1234` — change it in `web/password.txt`.
 | Tab | Description |
 |---|---|
 | Main | Relay switching (16 relays, toggle/switch modes) and camera view |
-| TRX | Transceiver frequency, band, mode display |
-| **Band Relay** | **Frequency-based automatic relay switching rules** |
-| Audio | Speaker and mic level control via ALSA |
-| Config | IP addresses, audio stream settings, profiles, restart services |
-| Status | Client RTT / connection status, local IP |
+| TRX | Transceiver frequency, band, mode display, and **Band Relay** frequency-based automatic relay switching rules |
+| Audio | Speaker and mic level control via ALSA, audio stream settings (sample rate/buffer), restart audio services |
+| Config | IP addresses, saved profiles, network status (client RTT / connection status, local IP) |
 | Settings | Relay names, group modes, TRX serial port and protocol, UART1 transparent relay toggle |
+| Update | Check GitHub for a newer release, view its changelog, apply the update and restart the web panel |
 
 ### Band Relay Rules
 
@@ -175,7 +175,7 @@ Example:
 - `1840-1900` kHz → relays 3, 4
 - `7000-7300` kHz → relays 5, 6
 
-Auto-switching can be toggled on/off via a checkbox in the Band Relay tab.
+Auto-switching can be toggled on/off via a checkbox in the TRX tab.
 
 ![WEB1](pics/nano-server-web-1.png)
 
@@ -273,12 +273,30 @@ sudo systemctl restart ptt_server.service
 sudo systemctl restart audio_server.service
 ```
 
-To restart the web panel from the UI, use the **"Restart Web Panel"** button on the Config tab (requires sudoers NOPASSWD for `systemctl restart relay-web`).
+To restart the web panel from the UI, use the **"Restart Web Panel"** button on the Update tab (requires sudoers NOPASSWD for `systemctl restart relay-web`). The **"Restart Audio Services"** button on the Audio tab restarts `audio_server`, `audio_client_on_server`, `mjpeg-streamer`, and `ptt_server` (via `restart_services_on_server.sh`).
 
 To reload `client_ip.cfg` without restarting the PTT service:
 
 ```bash
 sudo systemctl kill -s SIGHUP ptt_server.service
+```
+
+---
+
+## Software Update
+
+The **Update** tab checks GitHub for a newer release and applies it without needing SSH access to the server.
+
+- **Check for Update** fetches tags from `origin` and compares the highest `vX.Y.Z` tag to the version reachable from the currently checked-out commit (`git describe --tags`). If a newer one exists, it shows every `CHANGELOG.txt` section newer than the current version (not just the latest one), read directly from the fetched tag so it's visible even before pulling.
+- **Update** runs `git pull --ff-only`, then restarts `audio_server`, `audio_client_on_server`, `mjpeg-streamer`, and `ptt_server` (via `restart_services_on_server.sh`), and finally restarts `relay-web` itself.
+- Before pulling, it refuses if the checkout has local changes to any **tracked** file, or **any untracked file at all**, outside of the app's own runtime-state files (`web/config.json`, `audio/audio_config.cfg`, `web/trx_config.json`, `web/band_rules.json` — these are gitignored and rewritten by the app itself, so their local content is preserved across the pull automatically). A stray file left in the checkout (e.g. a manual backup) will block the update until it's removed or committed elsewhere.
+
+Cutting a new release: add a `## vX.Y.Z (date)` section with a bullet list to the top of `CHANGELOG.txt`, commit, then tag and push:
+
+```bash
+git tag vX.Y.Z
+git push origin main
+git push origin vX.Y.Z
 ```
 
 ---
@@ -292,7 +310,7 @@ RATE=48000       # sample rate: 48000 or 24000 Hz
 LATENCY=100000   # buffer time in microseconds (100 ms)
 ```
 
-Or use the **Configuration** page in the web UI.
+Or use the **Audio Stream Settings** section on the **Audio** page in the web UI.
 
 The web panel auto-detects the ALSA card (looks for C-Media USB Audio in `/proc/asound/cards`) and the speaker control name. Mic capture is hardcoded to `numid=8` (`Mic Capture Volume`).
 
@@ -382,18 +400,19 @@ nano-server/
 ├── create_ser2net_yaml.sh         # Generate ser2net config
 ├── client_ip.cfg                  # Client IP (git-ignored)
 ├── server_ip.cfg                  # Server IP (git-ignored)
+├── CHANGELOG.txt                  # Per-version release notes, read by the Update tab
 ├── armbianEnv.txt                 # Reference overlay config
 ├── audio/
 │   ├── audio_server.sh            # GStreamer TX pipeline
 │   ├── audio_client_on_server.sh  # GStreamer RX pipeline
-│   └── audio_config.cfg           # Rate and buffer settings
+│   └── audio_config.cfg           # Rate and buffer settings (git-ignored, written by the app)
 ├── network/
 │   └── combined_ptt_service.py    # PTT + CW Keyer + client monitor + ping responder
 ├── web/
-│   ├── app.py                     # Web UI: relays, TRX, audio, config, status, band relay
-│   ├── config.json                # Relay names and group modes
-│   ├── trx_config.json            # TRX serial port and protocol settings
-│   ├── band_rules.json            # Band relay frequency rules
+│   ├── app.py                     # Web UI: relays, TRX, band relay, audio, config, settings, update
+│   ├── config.json                # Relay names and group modes (git-ignored, written by the app)
+│   ├── trx_config.json            # TRX serial port and protocol settings (git-ignored, written by the app)
+│   ├── band_rules.json            # Band relay frequency rules (git-ignored, written by the app)
 │   └── password.txt               # Web UI password (git-ignored)
 ├── systemd/                       # Service unit files
 ├── profiles/                      # Saved configuration profiles (git-ignored)
