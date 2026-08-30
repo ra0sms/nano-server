@@ -1,3 +1,6 @@
+## v1.1.0 (2026-08-30)
+- Consolidate the web panel from 8 tabs to 6: Band Relay rules moved into the TRX tab, Audio Stream Settings and the Restart Audio Services button moved into the Audio tab, the Status tab merged into Config as a "Network Status" section, and the Restart Web Panel button moved into the Update tab
+
 ## v1.0.0 (2026-08-30)
 - Add Update tab to the web panel: checks GitHub for a newer release tag, shows the changelog for it, and applies the update (git pull + restart of all related systemd services) with one click
 - Fix Audio tab volume settings not persisting across reboot (alsactl store lacked permission when the panel runs as the "pi" user)
