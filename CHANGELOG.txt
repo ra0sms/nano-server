@@ -1,3 +1,6 @@
+## v1.1.1 (2026-08-30)
+- Fix Update tab always refusing to apply an update ("Repository has local changes") because the app's own runtime state files (web/config.json, audio/audio_config.cfg, web/trx_config.json, web/band_rules.json) were tracked or untracked-but-not-ignored, so git always saw them as locally modified. They're now gitignored, and the update flow preserves their live content across a git pull
+
 ## v1.1.0 (2026-08-30)
 - Consolidate the web panel from 8 tabs to 6: Band Relay rules moved into the TRX tab, Audio Stream Settings and the Restart Audio Services button moved into the Audio tab, the Status tab merged into Config as a "Network Status" section, and the Restart Web Panel button moved into the Update tab
 

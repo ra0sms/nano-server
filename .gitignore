@@ -2,6 +2,10 @@ client_ip.cfg
 server_ip.cfg
 web/password.txt
 web/secret_key.txt
+web/config.json
+web/trx_config.json
+web/band_rules.json
+audio/audio_config.cfg
 profiles/*.cfg
 __pycache__/
 *.py[cod]

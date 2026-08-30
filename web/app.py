@@ -3241,18 +3241,48 @@ def update_check():
     })
 
 
+# Files the running app itself rewrites at runtime (relay names/state, saved
+# audio/TRX/band-relay settings). Local edits to these are expected, not a
+# sign of a manually-modified checkout, so they must never block an update.
+_RUNTIME_STATE_FILES = [
+    "web/config.json",
+    "audio/audio_config.cfg",
+    "web/trx_config.json",
+    "web/band_rules.json",
+]
+
+
 @app.route("/update/apply", methods=["POST"])
 def update_apply():
     if not auth():
         return jsonify({"success": False, "message": "no auth"}), 403
+    runtime_snapshots = {}
     try:
         status = _run_git(["status", "--porcelain"])
         if status.returncode != 0:
             return jsonify({"success": False, "message": "git status failed"}), 500
-        if status.stdout.strip():
+
+        unexpected = []
+        for line in status.stdout.splitlines():
+            if not line.strip():
+                continue
+            code, path = line[:2], line[3:].strip()
+            if path in _RUNTIME_STATE_FILES:
+                abs_path = os.path.join(PROJECT_DIR, path)
+                if os.path.exists(abs_path):
+                    with open(abs_path, "rb") as f:
+                        runtime_snapshots[path] = f.read()
+                if code != "??":
+                    # Tracked + modified: reset to HEAD so git status is clean
+                    # for this path; the saved bytes are written back below,
+                    # after the pull, regardless of what the pull does to it.
+                    _run_git(["checkout", "--", path])
+            else:
+                unexpected.append(path)
+        if unexpected:
             return jsonify({
                 "success": False,
-                "message": "Repository has local changes, refusing to update.",
+                "message": "Repository has local changes, refusing to update: " + ", ".join(unexpected),
             }), 409
 
         pull = _run_git(["pull", "--ff-only"], timeout=60)
@@ -3260,6 +3290,12 @@ def update_apply():
             return jsonify({"success": False, "message": pull.stderr.strip() or "git pull failed"}), 500
     except subprocess.SubprocessError as e:
         return jsonify({"success": False, "message": str(e)}), 500
+    finally:
+        for path, content in runtime_snapshots.items():
+            abs_path = os.path.join(PROJECT_DIR, path)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, "wb") as f:
+                f.write(content)
 
     try:
         subprocess.run(
