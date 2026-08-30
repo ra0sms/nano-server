@@ -106,6 +106,7 @@ echo "$sudoers_entry" > /etc/sudoers.d/nano-server
 echo "pi ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart relay-web" >> /etc/sudoers.d/nano-server
 echo "pi ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop relay-web" >> /etc/sudoers.d/nano-server
 echo "pi ALL=(ALL) NOPASSWD: /usr/bin/systemctl start relay-web" >> /etc/sudoers.d/nano-server
+echo "pi ALL=(ALL) NOPASSWD: /usr/sbin/alsactl store -f /var/lib/alsa/asound.state" >> /etc/sudoers.d/nano-server
 chmod 0440 /etc/sudoers.d/nano-server
 
 echo -e "${GREEN}Configuration completed successfully. Please edit client_ip.cfg and server_ip.cfg, then reboot (sudo reboot).${NC}"

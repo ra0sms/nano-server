@@ -2938,10 +2938,12 @@ def alsa_save_state():
     alsa_restore.service restores at boot. Called after every level change
     so Audio IN/OUT settings survive a reboot."""
     try:
-        subprocess.run(
-            ["alsactl", "store", "-f", _ALSA_STATE_FILE],
+        result = subprocess.run(
+            ["sudo", "-n", "alsactl", "store", "-f", _ALSA_STATE_FILE],
             capture_output=True, timeout=10,
         )
+        if result.returncode != 0:
+            print(f"[audio] alsactl store failed: {result.stderr.decode(errors='replace')}")
     except Exception as e:
         print(f"[audio] alsactl store failed: {e}")
 
