@@ -1419,10 +1419,8 @@ HTML_TEMPLATE = """
     <div class="tabs">
         <div class="tab active" data-tab="main">Main</div>
         <div class="tab" data-tab="trx">TRX</div>
-        <div class="tab" data-tab="bandrelay">Band Relay</div>
         <div class="tab" data-tab="audio">Audio</div>
         <div class="tab" data-tab="config">Config</div>
-        <div class="tab" data-tab="status">Status</div>
         <div class="tab" data-tab="settings">Settings</div>
         <div class="tab" data-tab="update">Update</div>
         <div class="tab" onclick="location.href='/logout'">Logout</div>
@@ -1495,10 +1493,7 @@ HTML_TEMPLATE = """
 
             <button class="refresh-btn" onclick="loadTrxState()">Refresh</button>
         </div>
-    </div>
 
-    <!-- Band Relay Panel -->
-    <div id="bandrelay-panel" class="panel">
         <div class="group">
             <h2>Band Relay Rules</h2>
             <p style="margin-bottom:15px;color:#aaa;">Configure which relays activate for each frequency range (in kHz). Rule: <b>from ≤ freq < to</b> (lower bound inclusive, upper bound exclusive). To avoid gaps, set <b>to</b> of one rule equal to <b>from</b> of the next.</p>
@@ -1614,24 +1609,6 @@ HTML_TEMPLATE = """
             <div class="value-display" id="mic-val">50%</div>
             <button class="save-btn" onclick="setMic()">Set Capture</button>
         </div>
-    </div>
-
-    <!-- Config Panel -->
-    <div id="config-panel" class="panel">
-        <div class="group">
-            <h2>Saved Profiles</h2>
-            <div id="profile-grid" class="profile-grid"></div>
-        </div>
-        <div class="group">
-            <h2>Server IP Configuration (Local)</h2>
-            <textarea id="server-ip-input" style="width:100%;height:40px;padding:10px;border:1px solid #444;border-radius:6px;background:#2a2d34;color:white;font-family:monospace;margin-bottom:15px;resize:vertical;"></textarea>
-            <button class="save-btn" onclick="saveServerIp()">Save Server Config</button>
-        </div>
-        <div class="group">
-            <h2>Client IP Configuration (Remote)</h2>
-            <textarea id="client-ip-input" style="width:100%;height:40px;padding:10px;border:1px solid #444;border-radius:6px;background:#2a2d34;color:white;font-family:monospace;margin-bottom:15px;resize:vertical;"></textarea>
-            <button class="save-btn" onclick="saveClientIp()">Save Client Config</button>
-        </div>
         <div class="group">
             <h2>Audio Stream Settings</h2>
             <label>Sample Rate:</label>
@@ -1652,14 +1629,27 @@ HTML_TEMPLATE = """
         </div>
         <div class="group">
             <button class="save-btn danger" onclick="restartServices()" style="background:#d64545;">Restart Audio Services</button>
-            <button class="save-btn danger" onclick="restartWebPanel()" style="background:#d64545;margin-left:10px;">Restart Web Panel</button>
         </div>
     </div>
 
-    <!-- Status Panel -->
-    <div id="status-panel" class="panel">
+    <!-- Config Panel -->
+    <div id="config-panel" class="panel">
+        <div class="group">
+            <h2>Saved Profiles</h2>
+            <div id="profile-grid" class="profile-grid"></div>
+        </div>
+        <div class="group">
+            <h2>Server IP Configuration (Local)</h2>
+            <textarea id="server-ip-input" style="width:100%;height:40px;padding:10px;border:1px solid #444;border-radius:6px;background:#2a2d34;color:white;font-family:monospace;margin-bottom:15px;resize:vertical;"></textarea>
+            <button class="save-btn" onclick="saveServerIp()">Save Server Config</button>
+        </div>
+        <div class="group">
+            <h2>Client IP Configuration (Remote)</h2>
+            <textarea id="client-ip-input" style="width:100%;height:40px;padding:10px;border:1px solid #444;border-radius:6px;background:#2a2d34;color:white;font-family:monospace;margin-bottom:15px;resize:vertical;"></textarea>
+            <button class="save-btn" onclick="saveClientIp()">Save Client Config</button>
+        </div>
         <div class="group" style="text-align:center;">
-            <h2>Network Information</h2>
+            <h2>Network Status</h2>
             <div class="value-display" id="local-ip"><strong>Local IP:</strong> Loading...</div>
             <h2>Connection to Client</h2>
             <div id="connection-status" class="status-display" style="font-size:24px;font-weight:bold;text-align:center;margin:20px 0;">
@@ -1681,6 +1671,9 @@ HTML_TEMPLATE = """
             <button class="save-btn danger" id="apply-update-btn" onclick="applyUpdate()" disabled style="background:#d64545;opacity:0.5;">Update</button>
             <div id="update-status-msg" style="margin-top:10px;color:#7f8c8d;"></div>
             <pre id="update-changelog" style="display:none;margin-top:15px;white-space:pre-wrap;background:#1a1d24;border:1px solid #333;border-radius:8px;padding:15px;max-height:400px;overflow-y:auto;font-family:inherit;"></pre>
+        </div>
+        <div class="group">
+            <button class="save-btn danger" onclick="restartWebPanel()" style="background:#d64545;">Restart Web Panel</button>
         </div>
     </div>
 
@@ -2423,16 +2416,16 @@ HTML_TEMPLATE = """
             tab.addEventListener('click', function() {
                 const tabName = this.dataset.tab;
                 if (tabName === 'main') loadRelays();
-                if (tabName === 'audio') loadAudioState();
-                if (tabName === 'config') loadConfig();
-                if (tabName === 'status') { loadLocalIp(); updateConnectionStatus(); }
+                if (tabName === 'trx') loadBandRules();
+                if (tabName === 'audio') { loadAudioState(); loadConfig(); }
+                if (tabName === 'config') { loadConfig(); loadLocalIp(); updateConnectionStatus(); }
             });
         });
 
-        // Auto-refresh status every 2 seconds when Status tab is active
+        // Auto-refresh connection status every 2 seconds when Config tab is active
         setInterval(() => {
             const activePanel = document.querySelector('.panel.active');
-            if (activePanel && activePanel.id === 'status-panel') {
+            if (activePanel && activePanel.id === 'config-panel') {
                 updateConnectionStatus();
             }
         }, 2000);
@@ -2548,18 +2541,10 @@ HTML_TEMPLATE = """
             }).catch(() => showToast('❌ Network error', false));
         }
 
-        // Tab switch handler extension for bandrelay
-        document.querySelectorAll('.tab').forEach(tab => {
-            tab.addEventListener('click', function() {
-                const tabName = this.dataset.tab;
-                if (tabName === 'bandrelay') loadBandRules();
-            });
-        });
-
-        // Auto-refresh bandrelay state when tab is active
+        // Auto-refresh bandrelay state when TRX tab is active
         setInterval(() => {
             const activePanel = document.querySelector('.panel.active');
-            if (activePanel && activePanel.id === 'bandrelay-panel') {
+            if (activePanel && activePanel.id === 'trx-panel') {
                 fetch('/bandrelay/state')
                     .then(r => r.json())
                     .then(data => {
