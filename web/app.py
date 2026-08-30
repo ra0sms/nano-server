@@ -302,6 +302,7 @@ SERVER_IP_FILE = os.path.join(PROJECT_DIR, "server_ip.cfg")
 CLIENT_IP_FILE = os.path.join(PROJECT_DIR, "client_ip.cfg")
 AUDIO_CONFIG_FILE = os.path.join(PROJECT_DIR, "audio/audio_config.cfg")
 PROFILES_DIR = os.path.join(PROJECT_DIR, "profiles")
+CHANGELOG_FILE = os.path.join(PROJECT_DIR, "CHANGELOG.txt")
 
 # UDP Ping configuration
 UDP_PORT = 5002
@@ -1423,6 +1424,7 @@ HTML_TEMPLATE = """
         <div class="tab" data-tab="config">Config</div>
         <div class="tab" data-tab="status">Status</div>
         <div class="tab" data-tab="settings">Settings</div>
+        <div class="tab" data-tab="update">Update</div>
         <div class="tab" onclick="location.href='/logout'">Logout</div>
     </div>
 
@@ -1664,6 +1666,21 @@ HTML_TEMPLATE = """
                 <span id="rtt-value">--</span>
             </div>
             <div id="timestamp" class="timestamp" style="font-size:14px;color:#7f8c8d;text-align:center;">Last updated: --</div>
+        </div>
+    </div>
+
+    <!-- Update Panel -->
+    <div id="update-panel" class="panel">
+        <div class="group">
+            <h2>Software Update</h2>
+            <div style="margin-bottom:15px;">
+                Current version: <strong id="update-current-version">—</strong><br>
+                Latest version: <strong id="update-latest-version">—</strong>
+            </div>
+            <button class="save-btn" onclick="checkForUpdate()">Check for Update</button>
+            <button class="save-btn danger" id="apply-update-btn" onclick="applyUpdate()" disabled style="background:#d64545;opacity:0.5;">Update</button>
+            <div id="update-status-msg" style="margin-top:10px;color:#7f8c8d;"></div>
+            <pre id="update-changelog" style="display:none;margin-top:15px;white-space:pre-wrap;background:#1a1d24;border:1px solid #333;border-radius:8px;padding:15px;max-height:400px;overflow-y:auto;font-family:inherit;"></pre>
         </div>
     </div>
 
@@ -2338,6 +2355,67 @@ HTML_TEMPLATE = """
                     timeEl.textContent = 'Last updated: ' + data.timestamp;
                 })
                 .catch(() => {});
+        }
+
+        // ================= Update functions =================
+        function checkForUpdate() {
+            const applyBtn = document.getElementById('apply-update-btn');
+            const msgEl = document.getElementById('update-status-msg');
+            const changelogEl = document.getElementById('update-changelog');
+            applyBtn.disabled = true;
+            applyBtn.style.opacity = 0.5;
+            changelogEl.style.display = 'none';
+            changelogEl.textContent = '';
+            msgEl.textContent = 'Checking for updates...';
+            fetch('/update/check')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('update-current-version').textContent = data.current || '—';
+                    document.getElementById('update-latest-version').textContent = data.latest || '—';
+                    if (data.error) {
+                        msgEl.textContent = '❌ ' + data.error;
+                        return;
+                    }
+                    if (data.update_available) {
+                        msgEl.textContent = 'Update available.';
+                        if (data.changelog) {
+                            changelogEl.textContent = data.changelog;
+                            changelogEl.style.display = 'block';
+                        }
+                        applyBtn.disabled = false;
+                        applyBtn.style.opacity = 1;
+                    } else {
+                        msgEl.textContent = 'You are running the latest version.';
+                    }
+                })
+                .catch(() => { msgEl.textContent = '❌ Network error'; });
+        }
+
+        function applyUpdate() {
+            if (!confirm('Update to the latest version and restart all services now?')) return;
+            const applyBtn = document.getElementById('apply-update-btn');
+            const msgEl = document.getElementById('update-status-msg');
+            applyBtn.disabled = true;
+            applyBtn.style.opacity = 0.5;
+            msgEl.textContent = 'Updating...';
+            fetch('/update/apply', {method: 'POST'})
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        msgEl.textContent = '🔄 ' + data.message;
+                        showToast('✅ Update started, panel restarting...', true);
+                        setTimeout(() => { location.reload(); }, 8000);
+                    } else {
+                        msgEl.textContent = '❌ ' + data.message;
+                        applyBtn.disabled = false;
+                        applyBtn.style.opacity = 1;
+                    }
+                })
+                .catch(() => {
+                    msgEl.textContent = '❌ Network error';
+                    applyBtn.disabled = false;
+                    applyBtn.style.opacity = 1;
+                });
         }
 
         // Tab switch handler extension
@@ -3086,6 +3164,133 @@ def config_restart_web():
         return "ok"
     except Exception as e:
         return f"Failed: {e}", 500
+
+
+# ================= UPDATE API =================
+
+_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+
+
+def _parse_version(tag):
+    """Parse a 'vX.Y.Z' tag into a comparable (X, Y, Z) tuple, or None."""
+    if not tag:
+        return None
+    m = _VERSION_RE.match(tag.strip())
+    if not m:
+        return None
+    return tuple(int(g) for g in m.groups())
+
+
+def _run_git(args, timeout=20):
+    return subprocess.run(
+        ["git", "-C", PROJECT_DIR] + args,
+        capture_output=True, text=True, timeout=timeout,
+    )
+
+
+def get_current_version():
+    """Latest version tag reachable from HEAD, or 'v0.0.0' if none."""
+    try:
+        r = _run_git(["describe", "--tags", "--abbrev=0"])
+    except subprocess.SubprocessError:
+        return "v0.0.0"
+    tag = r.stdout.strip()
+    if r.returncode == 0 and _parse_version(tag):
+        return tag
+    return "v0.0.0"
+
+
+def get_latest_tag():
+    """Fetch tags from origin and return the highest 'vX.Y.Z' tag, or None."""
+    try:
+        _run_git(["fetch", "--tags", "--force", "origin"], timeout=30)
+        r = _run_git(["tag", "--list", "v*"])
+    except subprocess.SubprocessError:
+        return None
+    if r.returncode != 0:
+        return None
+    tags = [t for t in r.stdout.splitlines() if _parse_version(t)]
+    if not tags:
+        return None
+    tags.sort(key=lambda t: _parse_version(t) or (0, 0, 0))
+    return tags[-1]
+
+
+def get_changelog_for_new_versions(current_version):
+    """Changelog sections (## vX.Y.Z ...) for versions newer than current_version."""
+    if not os.path.exists(CHANGELOG_FILE):
+        return ""
+    with open(CHANGELOG_FILE, "r") as f:
+        content = f.read()
+    cur_v = _parse_version(current_version) or (0, 0, 0)
+    sections = re.split(r"(?m)^(?=## v\d+\.\d+\.\d+)", content)
+    entries = []
+    for section in sections:
+        m = re.match(r"^## (v\d+\.\d+\.\d+)", section)
+        if not m:
+            continue
+        v = _parse_version(m.group(1))
+        if v and v > cur_v:
+            entries.append(section.strip())
+    return "\n\n".join(entries)
+
+
+@app.route("/update/check")
+def update_check():
+    if not auth():
+        return jsonify({}), 403
+    current = get_current_version()
+    latest = get_latest_tag()
+    if latest is None:
+        return jsonify({
+            "current": current, "latest": None, "update_available": False,
+            "error": "Could not reach GitHub or no version tags found.",
+        })
+    update_available = (_parse_version(latest) or (0, 0, 0)) > (_parse_version(current) or (0, 0, 0))
+    changelog = get_changelog_for_new_versions(current) if update_available else ""
+    return jsonify({
+        "current": current,
+        "latest": latest,
+        "update_available": update_available,
+        "changelog": changelog,
+    })
+
+
+@app.route("/update/apply", methods=["POST"])
+def update_apply():
+    if not auth():
+        return jsonify({"success": False, "message": "no auth"}), 403
+    try:
+        status = _run_git(["status", "--porcelain"])
+        if status.returncode != 0:
+            return jsonify({"success": False, "message": "git status failed"}), 500
+        if status.stdout.strip():
+            return jsonify({
+                "success": False,
+                "message": "Repository has local changes, refusing to update.",
+            }), 409
+
+        pull = _run_git(["pull", "--ff-only"], timeout=60)
+        if pull.returncode != 0:
+            return jsonify({"success": False, "message": pull.stderr.strip() or "git pull failed"}), 500
+    except subprocess.SubprocessError as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+    try:
+        subprocess.run(
+            ["sudo", os.path.join(PROJECT_DIR, "restart_services_on_server.sh")],
+            timeout=30,
+        )
+    except subprocess.SubprocessError as e:
+        print(f"[update] restart_services_on_server.sh failed: {e}")
+
+    # Restart relay-web last and in the background, since it kills this process.
+    subprocess.Popen(
+        ["sudo", "systemctl", "restart", "relay-web"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return jsonify({"success": True, "message": "Updated, services are restarting..."})
 
 
 # ================= STATUS API =================

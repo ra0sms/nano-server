@@ -1,0 +1,3 @@
+## v1.0.0 (2026-08-30)
+- Add Update tab to the web panel: checks GitHub for a newer release tag, shows the changelog for it, and applies the update (git pull + restart of all related systemd services) with one click
+- Fix Audio tab volume settings not persisting across reboot (alsactl store lacked permission when the panel runs as the "pi" user)
