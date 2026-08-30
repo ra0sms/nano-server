@@ -3319,14 +3319,7 @@ def update_apply():
                     # for this path; the saved bytes are written back below,
                     # after the pull, regardless of what the pull does to it.
                     _run_git(["checkout", "--", path])
-            elif code != "??":
-                # A tracked file with local edits outside the runtime-state
-                # allowlist: a fast-forward pull would refuse anyway, so
-                # surface it clearly instead of letting git's own error
-                # through. Untracked clutter (code "??") is left alone: it
-                # doesn't block a fast-forward pull unless the incoming
-                # commit adds a file at that exact path, in which case the
-                # pull itself will fail below with a clear message.
+            else:
                 unexpected.append(path)
         if unexpected:
             return jsonify({
