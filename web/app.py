@@ -2366,12 +2366,12 @@ HTML_TEMPLATE = """
             return div.innerHTML;
         }
 
-        // Renders "## vX.Y.Z (date)\n- item\n- item" changelog sections as
+        // Renders "## vX.Y.Z (date)\\n- item\\n- item" changelog sections as
         // a heading + bullet list per version, newest first.
         function renderChangelogHtml(text) {
             if (!text) return '';
-            return text.split(/\n\n(?=## )/).map(section => {
-                const lines = section.split('\n');
+            return text.split(/\\n\\n(?=## )/).map(section => {
+                const lines = section.split('\\n');
                 const header = lines[0].replace(/^##\\s*/, '');
                 const items = lines.slice(1)
                     .filter(l => l.trim().startsWith('-'))

@@ -1,5 +1,8 @@
+## v1.1.5 (2026-08-30)
+- Fix the actual cause of the broken web panel (a bug present since v1.1.2, not v1.1.3 as first suspected): the changelog-rendering JS had literal "\n" sequences written inside app.py's non-raw triple-quoted HTML_TEMPLATE string, so Python's own string parsing turned them into real newline characters before they ever reached the browser, corrupting a JS comment and splitting a string literal across lines ("Uncaught SyntaxError: string literal contains an unescaped line break"), which broke every tab and button on the page. All such sequences are now properly double-escaped
+
 ## v1.1.4 (2026-08-30)
-- Revert v1.1.3 (untracked-file update check + privatekey/publickey gitignore): it broke the web panel for at least one deployed device after a git pull. Back to the known-working v1.1.2 code while the cause is investigated
+- Revert v1.1.3 (untracked-file update check + privatekey/publickey gitignore): it broke the web panel for at least one deployed device after a git pull. Back to the known-working v1.1.2 code while the cause is investigated (turned out the real bug predated v1.1.3 — see v1.1.5)
 
 ## v1.1.2 (2026-08-30)
 - Update tab now shows the current version immediately on open (via a new local-only /update/current check, no GitHub call), instead of only after clicking Check for Update
