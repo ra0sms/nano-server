@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NanoPi Controller</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <h1>NanoPi Controller</h1>
+
+    <div class="tabs">
+        <div class="tab active" data-tab="main">Main</div>
+        <div class="tab" data-tab="trx">TRX</div>
+        <div class="tab" data-tab="audio">Audio</div>
+        <div class="tab" data-tab="config">Config</div>
+        <div class="tab" data-tab="settings">Settings</div>
+        <div class="tab" data-tab="update">Update</div>
+        <div class="tab" onclick="location.href='/logout'">Logout</div>
+    </div>
+
+    <!-- Main Panel -->
+    <div id="main-panel" class="panel active">
+        <div class="group" style="text-align:center;padding:12px;">
+            <div id="ptt-indicator" style="font-size:20px;font-weight:bold;padding:8px 16px;border-radius:8px;display:inline-block;">
+                PTT: OFF
+            </div>
+        </div>
+
+        <div class="group">
+            <h3>Group 1 (<span id="mode0_label">toggle</span>)</h3>
+            <div id="relays1" class="relay-grid"></div>
+        </div>
+
+        <div class="group">
+            <h3>Group 2 (<span id="mode1_label">toggle</span>)</h3>
+            <div id="relays2" class="relay-grid"></div>
+        </div>
+
+        <h3>Camera</h3>
+        <button class="camera-btn" onclick="toggleCamera()">Show Camera</button>
+        <button class="camera-btn" onclick="openCameraWindow()">Fullscreen</button>
+        <div id="camera-container" style="margin-top: 20px;"></div>
+    </div>
+
+    <!-- TRX Panel -->
+    <div id="trx-panel" class="panel">
+        <div class="trx-panel">
+            <h3>Transceiver Status</h3>
+            <div id="trx-status" style="font-size: 18px; margin: 10px;">Loading...</div>
+            <div class="freq-display" id="trx-freq">---.--- MHz</div>
+            <div id="trx-band">Band: ---</div>
+            <div id="trx-mode">Mode: ---</div>
+
+            <!-- Frequency Step Controls -->
+            <div style="margin: 15px 0;">
+                <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
+                    <button class="freq-step-btn" onclick="freqStep(-10000000)" style="background:#8e44ad;">-10 MHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(-1000000)" style="background:#8e44ad;">-1 MHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(-100000)" style="background:#2980b9;">-100 kHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(-10000)" style="background:#2980b9;">-10 kHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(-1000)" style="background:#2980b9;">-1 kHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(1000)" style="background:#e67e22;">+1 kHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(10000)" style="background:#e67e22;">+10 kHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(100000)" style="background:#e67e22;">+100 kHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(1000000)" style="background:#27ae60;">+1 MHz</button>
+                    <button class="freq-step-btn" onclick="freqStep(10000000)" style="background:#27ae60;">+10 MHz</button>
+                </div>
+            </div>
+
+            <!-- Band Selection -->
+            <div style="margin: 15px 0;">
+                <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
+                    <button class="band-btn" onclick="setBand('160m')">160m</button>
+                    <button class="band-btn" onclick="setBand('80m')">80m</button>
+                    <button class="band-btn" onclick="setBand('40m')">40m</button>
+                    <button class="band-btn" onclick="setBand('30m')">30m</button>
+                    <button class="band-btn" onclick="setBand('20m')">20m</button>
+                    <button class="band-btn" onclick="setBand('17m')">17m</button>
+                    <button class="band-btn" onclick="setBand('15m')">15m</button>
+                    <button class="band-btn" onclick="setBand('12m')">12m</button>
+                    <button class="band-btn" onclick="setBand('10m')">10m</button>
+                    <button class="band-btn" onclick="setBand('6m')">6m</button>
+                </div>
+            </div>
+
+            <button class="refresh-btn" onclick="loadTrxState()">Refresh</button>
+        </div>
+
+        <div class="group">
+            <h2>Band Relay Rules</h2>
+            <p style="margin-bottom:15px;color:#aaa;">Configure which relays activate for each frequency range (in kHz). Rule: <b>from ≤ freq < to</b> (lower bound inclusive, upper bound exclusive). To avoid gaps, set <b>to</b> of one rule equal to <b>from</b> of the next.</p>
+            <div style="margin-bottom:15px;padding:10px;background:#2a2d34;border-radius:6px;display:flex;align-items:center;gap:10px;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:16px;">
+                    <input type="checkbox" id="bandrelay-enabled" onchange="toggleBandRelay()" style="width:20px;height:20px;cursor:pointer;" checked>
+                    <span>Auto relay switching</span>
+                </label>
+            </div>
+            <div id="bandrelay-status" style="margin-bottom:15px;padding:10px;background:#2a2d34;border-radius:6px;">
+                Current: <span id="bandrelay-current-freq">---</span> kHz → Relays: <span id="bandrelay-current-relays">none</span>
+            </div>
+            <table style="width:100%;border-collapse:collapse;margin-bottom:15px;">
+                <thead>
+                    <tr style="background:#2a2d34;">
+                        <th style="padding:8px;text-align:left;border-bottom:2px solid #444;">From (kHz)</th>
+                        <th style="padding:8px;text-align:left;border-bottom:2px solid #444;">To (kHz)</th>
+                        <th style="padding:8px;text-align:left;border-bottom:2px solid #444;">Active Relays (1-16)</th>
+                        <th style="padding:8px;text-align:center;border-bottom:2px solid #444;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="bandrelay-table-body">
+                </tbody>
+            </table>
+            <button class="save-btn" onclick="addBandRule()" style="margin-right:10px;">+ Add Rule</button>
+            <button class="save-btn" onclick="saveBandRules()">Save All Rules</button>
+            <button class="refresh-btn" onclick="loadBandRules()" style="margin-left:10px;">Refresh</button>
+        </div>
+    </div>
+
+    <!-- Settings Panel -->
+    <div id="settings-panel" class="panel">
+        <div class="settings-grid">
+            <div class="settings-column">
+                <h4>Group 1 Settings</h4>
+                Mode:
+                <select id="group1_mode">
+                    <option value="toggle">Toggle</option>
+                    <option value="switch">Switch</option>
+                </select>
+                <div id="relay-names1" style="margin-top: 15px;"></div>
+            </div>
+
+            <div class="settings-column">
+                <h4>Group 2 Settings</h4>
+                Mode:
+                <select id="group2_mode">
+                    <option value="toggle">Toggle</option>
+                    <option value="switch">Switch</option>
+                </select>
+                <div id="relay-names2" style="margin-top: 15px;"></div>
+            </div>
+        </div>
+
+        <div class="settings-grid">
+            <div class="settings-column">
+                <h4>Transceiver Settings</h4>
+                <label>Serial Port:
+                    <button class="btn-small" onclick="refreshPorts()" style="background:#2d6cdf;color:white;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:12px;margin-left:5px;" title="Scan for available ports">🔄</button>
+                </label>
+                <select id="trx-port" onchange="onPortChange()">
+                    <option value="">-- Scan for ports --</option>
+                </select>
+                <button class="btn-small" onclick="reconnectTrx()" style="background:#27ae60;color:white;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;margin-top:4px;" title="Reconnect to the selected port">🔌 Reconnect</button>
+                <label>Baudrate:</label>
+                <select id="trx-baudrate">
+                    <option value="4800">4800</option>
+                    <option value="9600">9600</option>
+                    <option value="19200">19200</option>
+                    <option value="38400">38400</option>
+                    <option value="57600">57600</option>
+                    <option value="115200">115200</option>
+                </select>
+                <label>Protocol:</label>
+                <select id="trx-protocol">
+                    <option value="Icom">Icom (CI-V)</option>
+                    <option value="Kenwood">Kenwood</option>
+                </select>
+                <label>Transceiver Address (hex):</label>
+                <input type="text" id="trx-radio-addr" placeholder="e.g. 0x70" maxlength="6">
+                <label>Enabled:</label>
+                <select id="trx-enabled">
+                    <option value="true">Yes</option>
+                    <option value="false">No</option>
+                </select>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px;">
+                    <input type="checkbox" id="trx-uart1-enabled" style="width:18px;height:18px;cursor:pointer;">
+                    <span>UART1 transparent relay</span>
+                </label>
+                <div style="font-size:12px;color:#7f8c8d;margin-top:2px;">ttyS1 ↔ transceiver CAT bridge for flrig/TR4W</div>
+            </div>
+
+            <div class="settings-column">
+                <h4>Actions</h4>
+                <button class="save-btn" onclick="saveRelaySettings()" style="width: 100%; margin-bottom: 10px;">Save Relay Settings</button>
+                <button class="save-btn" onclick="saveTrxSettings()" style="width: 100%; margin-bottom: 10px;">Save TRX Settings</button>
+                <button class="save-btn" onclick="saveAllSettings()" style="width: 100%;">Save All Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Audio Panel -->
+    <div id="audio-panel" class="panel">
+        <div class="group">
+            <h2>Audio OUT</h2>
+            <input type="range" id="speaker-slider" min="0" max="100" value="50" class="audio-slider">
+            <div class="value-display" id="speaker-val">50%</div>
+            <button class="save-btn" onclick="setSpeaker()">Set Speaker</button>
+        </div>
+        <div class="group">
+            <h2>Audio IN</h2>
+            <input type="range" id="mic-slider" min="0" max="100" value="50" class="audio-slider">
+            <div class="value-display" id="mic-val">50%</div>
+            <button class="save-btn" onclick="setMic()">Set Capture</button>
+        </div>
+        <div class="group">
+            <h2>Audio Stream Settings</h2>
+            <label>Sample Rate:</label>
+            <select id="audio-rate">
+                <option value="48000">48000 Hz</option>
+                <option value="24000">24000 Hz</option>
+            </select>
+            <label>Buffer Time (alsasrc):</label>
+            <select id="audio-buffer">
+                <option value="50000">50 ms (50000 µs)</option>
+                <option value="100000">100 ms (100000 µs)</option>
+                <option value="200000">200 ms (200000 µs)</option>
+                <option value="300000">300 ms (300000 µs)</option>
+                <option value="400000">400 ms (400000 µs)</option>
+                <option value="500000">500 ms (500000 µs)</option>
+            </select>
+            <button class="save-btn" onclick="saveAudioSettings()" style="margin-top:10px;">Save Audio Settings</button>
+        </div>
+        <div class="group">
+            <button class="save-btn danger" onclick="restartServices()" style="background:#d64545;">Restart Audio Services</button>
+        </div>
+    </div>
+
+    <!-- Config Panel -->
+    <div id="config-panel" class="panel">
+        <div class="group">
+            <h2>Saved Profiles</h2>
+            <div id="profile-grid" class="profile-grid"></div>
+        </div>
+        <div class="group">
+            <h2>Server IP Configuration (Local)</h2>
+            <textarea id="server-ip-input" style="width:100%;height:40px;padding:10px;border:1px solid #444;border-radius:6px;background:#2a2d34;color:white;font-family:monospace;margin-bottom:15px;resize:vertical;"></textarea>
+            <button class="save-btn" onclick="saveServerIp()">Save Server Config</button>
+        </div>
+        <div class="group">
+            <h2>Client IP Configuration (Remote)</h2>
+            <textarea id="client-ip-input" style="width:100%;height:40px;padding:10px;border:1px solid #444;border-radius:6px;background:#2a2d34;color:white;font-family:monospace;margin-bottom:15px;resize:vertical;"></textarea>
+            <button class="save-btn" onclick="saveClientIp()">Save Client Config</button>
+        </div>
+        <div class="group" style="text-align:center;">
+            <h2>Network Status</h2>
+            <div class="value-display" id="local-ip"><strong>Local IP:</strong> Loading...</div>
+            <h2>Connection to Client</h2>
+            <div id="connection-status" class="status-display" style="font-size:24px;font-weight:bold;text-align:center;margin:20px 0;">
+                <span id="rtt-value">--</span>
+            </div>
+            <div id="timestamp" class="timestamp" style="font-size:14px;color:#7f8c8d;text-align:center;">Last updated: --</div>
+        </div>
+    </div>
+
+    <!-- Update Panel -->
+    <div id="update-panel" class="panel">
+        <div class="group">
+            <h2>Software Update</h2>
+            <div style="margin-bottom:15px;">
+                Current version: <strong id="update-current-version">—</strong><br>
+                Latest version: <strong id="update-latest-version">—</strong>
+            </div>
+            <button class="save-btn" onclick="checkForUpdate()">Check for Update</button>
+            <button class="save-btn danger" id="apply-update-btn" onclick="applyUpdate()" disabled style="background:#d64545;opacity:0.5;">Update</button>
+            <div id="update-status-msg" style="margin-top:10px;color:#7f8c8d;"></div>
+            <div id="update-changelog" style="display:none;margin-top:15px;background:#1a1d24;border:1px solid #333;border-radius:8px;padding:15px;max-height:400px;overflow-y:auto;"></div>
+        </div>
+        <div class="group">
+            <button class="save-btn danger" onclick="restartWebPanel()" style="background:#d64545;">Restart Web Panel</button>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
