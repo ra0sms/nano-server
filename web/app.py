@@ -270,8 +270,27 @@ def apply_band_rules(freq_hz):
     return sorted(active_relays)
 
 
+def _managed_relay_groups():
+    """Return the set of relay groups (0 = relays 1-8, 1 = relays 9-16) that are
+    referenced by any band rule. Groups not referenced by any rule are left
+    completely untouched by automatic switching, so their relays can still be
+    selected manually without being reset on every frequency change."""
+    managed = set()
+    for rule in band_rules:
+        for r in rule.get("relays", []):
+            if 0 <= r <= 15:
+                managed.add(0 if r < 8 else 1)
+    return managed
+
+
 def set_relays_for_frequency(freq_hz):
-    """Set all 16 relays according to band rules for the given frequency."""
+    """Set relays according to band rules for the given frequency.
+
+    Only the relay group(s) actually referenced by the band rules are reset and
+    re-selected (auto-managed). Relays in any other group keep their current
+    state, so e.g. if auto-switching only uses relays 1-8, then relays 9-16 are
+    never touched automatically and can be selected manually.
+    """
     global state1, state2, ptt_active
     if not band_relay_enabled:
         return []
@@ -281,10 +300,14 @@ def set_relays_for_frequency(freq_hz):
         return []
 
     target = apply_band_rules(freq_hz)
+    managed = _managed_relay_groups()
 
-    # Turn all relays OFF first, then turn ON only the target ones
-    state1 = 0xFF
-    state2 = 0xFF
+    # Only reset the groups that are auto-managed by the band rules. The other
+    # group byte is left as-is so a manually-selected relay there is preserved.
+    if 0 in managed:
+        state1 = 0xFF
+    if 1 in managed:
+        state2 = 0xFF
 
     for r in target:
         set_relay(r, True)

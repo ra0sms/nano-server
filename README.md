@@ -177,6 +177,14 @@ Example:
 
 Auto-switching can be toggled on/off via a checkbox in the TRX tab.
 
+**Group-scoped auto-switching:** auto-switching only touches the relay group(s) that the configured rules actually reference, leaving the other group fully manual:
+
+- If the saved rules only use relays **1–8**, then relays **9–16** are never reset or switched automatically — they can be selected manually and their state is preserved across every frequency change (and vice versa).
+- If the rules reference relays from both groups, both are auto-managed (all selected relays are reset and re-applied as before).
+- If no rule references any relay, auto-switching leaves all 16 relays untouched.
+
+This makes it possible to dedicate one relay group to automatic antenna/band switching while keeping the other group for manually-controlled devices.
+
 ![WEB1](pics/nano-server-web-1.png)
 
 ![WEB2](pics/nano-server-web-2.png)
@@ -410,6 +418,9 @@ nano-server/
 │   └── combined_ptt_service.py    # PTT + CW Keyer + client monitor + ping responder
 ├── web/
 │   ├── app.py                     # Web UI: relays, TRX, band relay, audio, config, settings, update
+│   ├── templates/index.html       # Web UI page markup (rendered via render_template)
+│   ├── static/css/style.css       # Web UI stylesheet
+│   ├── static/js/main.js          # Web UI client-side logic
 │   ├── config.json                # Relay names and group modes (git-ignored, written by the app)
 │   ├── trx_config.json            # TRX serial port and protocol settings (git-ignored, written by the app)
 │   ├── band_rules.json            # Band relay frequency rules (git-ignored, written by the app)
