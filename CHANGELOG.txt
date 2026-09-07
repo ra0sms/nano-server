@@ -1,3 +1,7 @@
+## v1.2.0 (2026-09-07)
+   - Split the web panel UI out of app.py: HTML -> web/templates/index.html, CSS -> web/static/css/style.css, JS -> web/static/js/main.js, loads static assets via url_for instead of a huge inline template)
+
+
 ## v1.1.10 (2026-08-30)
 - No code changes — version bump to verify the Update tab's check/apply flow end-to-end
 
