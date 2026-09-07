@@ -7844,7 +7844,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric"
+		(property "Footprint" "Resistor_SMD:R_1206_3216Metric"
 			(at 83.058 166.37 90)
 			(hide yes)
 			(show_name no)
@@ -9450,7 +9450,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "22u"
+		(property "Value" "10u"
 			(at 170.18 31.496 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9461,7 +9461,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric"
+		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric_Pad1.33x1.80mm_HandSolder"
 			(at 169.8752 39.37 0)
 			(hide yes)
 			(show_name no)
@@ -9785,7 +9785,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric"
+		(property "Footprint" "Resistor_SMD:R_1206_3216Metric"
 			(at 127.508 166.37 90)
 			(hide yes)
 			(show_name no)
@@ -14188,7 +14188,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric"
+		(property "Footprint" "Resistor_SMD:R_1206_3216Metric"
 			(at 193.548 97.79 90)
 			(hide yes)
 			(show_name no)
@@ -14270,7 +14270,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric"
+		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric_Pad1.33x1.80mm_HandSolder"
 			(at 116.5352 38.1 0)
 			(hide yes)
 			(show_name no)
@@ -15245,7 +15245,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" "Diode_SMD:D_1206_3216Metric"
+		(property "Footprint" "LED_SMD:LED_1206_3216Metric"
 			(at 125.73 175.26 0)
 			(hide yes)
 			(show_name no)
@@ -15756,7 +15756,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric"
+		(property "Footprint" "Resistor_SMD:R_1206_3216Metric"
 			(at 86.36 163.068 90)
 			(hide yes)
 			(show_name no)
@@ -16178,7 +16178,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric"
+		(property "Footprint" "Resistor_SMD:R_1206_3216Metric"
 			(at 199.898 97.79 90)
 			(hide yes)
 			(show_name no)
