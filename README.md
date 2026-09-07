@@ -52,7 +52,7 @@ Client PC                          NanoPi NEO (Server)
                     UDP :5001  ──→  PTT commands (0/1)
                     UDP :5002  ←→   Ping / RTT monitoring
                     UDP :5003  ──→  CW Keyer (Winkeyer protocol)
-                    TCP :5050  ←──  Web UI (Flask): relays, TRX, band relay, audio, config, settings, update
+                    TCP :5050  ←──  Web UI (Flask): relays, TRX, band relay, audio, config, settings, update (live status over SSE)
                     TCP :8081  ←──  MJPEG video stream
                     TCP :3001  ←──  CAT (Icom CI-V or Kenwood)
 
@@ -165,6 +165,16 @@ Default password: `1234` — change it in `web/password.txt`.
 | Config | IP addresses, saved profiles, network status (client RTT / connection status, local IP) |
 | Settings | Relay names, group modes, TRX serial port and protocol, UART1 transparent relay toggle |
 | Update | Check GitHub for a newer release, view its changelog, apply the update and restart the web panel |
+
+### Persistent Status Bar & Real-Time Updates
+
+A **status bar** is shown at the top of every tab with the current PTT state, the transceiver online/frequency indicator, and the client link latency (RTT):
+
+- **PTT** — turns red (`● PTT: ON`) while transmitting, grey otherwise.
+- **TRX** — `🟢 ONLINE` / `🔴 OFFLINE` plus the live frequency.
+- **Client** — round-trip time to the client PC in milliseconds.
+
+Live values are pushed to the browser over **Server-Sent Events** (SSE, `GET /events`). The server sends a combined snapshot (PTT, relay state, TRX frequency/band/mode, client RTT, band-relay current state) that is emitted only when it changes, replacing the previous per-tab HTTP polling every 2 s. This makes status changes appear immediately and reduces load on the device. The SSE stream requires an authenticated session (cookies are sent automatically by the browser) and reconnects automatically if dropped.
 
 ### Band Relay Rules
 
@@ -417,7 +427,7 @@ nano-server/
 ├── network/
 │   └── combined_ptt_service.py    # PTT + CW Keyer + client monitor + ping responder
 ├── web/
-│   ├── app.py                     # Web UI: relays, TRX, band relay, audio, config, settings, update
+│   ├── app.py                     # Web UI: relays, TRX, band relay, audio, config, settings, update (+ live status via SSE /events)
 │   ├── templates/index.html       # Web UI page markup (rendered via render_template)
 │   ├── static/css/style.css       # Web UI stylesheet
 │   ├── static/js/main.js          # Web UI client-side logic
