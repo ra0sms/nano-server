@@ -27,19 +27,12 @@ document.querySelectorAll('.tab').forEach(tab => {
     });
 });
 
-// PTT indicator
+// PTT indicator (persistent status bar, visible on every tab)
 function updatePttIndicator() {
-    const el = document.getElementById('ptt-indicator');
+    const el = document.getElementById('sb-ptt');
     if (!el) return;
-    if (pttActive) {
-        el.textContent = '● PTT: ON';
-        el.style.background = '#d64545';
-        el.style.color = 'white';
-    } else {
-        el.textContent = '● PTT: OFF';
-        el.style.background = '#2a2d34';
-        el.style.color = '#7f8c8d';
-    }
+    el.textContent = pttActive ? '● PTT: ON' : '● PTT: OFF';
+    el.className = pttActive ? 'sb-chip sb-ptt-on' : 'sb-chip sb-ptt-off';
 }
 
 // Relay functions
@@ -65,6 +58,21 @@ function renderRelays() {
     updatePttIndicator();
 }
 
+function syncSettingsNames() {
+    const names1 = document.getElementById('relay-names1');
+    const names2 = document.getElementById('relay-names2');
+    if (!names1 || !names2) return;
+    names1.innerHTML = '';
+    names2.innerHTML = '';
+    for (let i = 0; i < 16; i++) {
+        const div = document.createElement('div');
+        div.className = 'name-row';
+        div.innerHTML = `<span>${i+1}.</span><input type="text" id="relay_name_${i}" value="${relayNames[i]}">`;
+        if (i < 8) names1.appendChild(div);
+        else names2.appendChild(div);
+    }
+}
+
 function loadRelays() {
     fetch('/state')
         .then(r => r.json())
@@ -79,19 +87,7 @@ function loadRelays() {
             // Settings panel
             document.getElementById('group1_mode').value = relayMode[0];
             document.getElementById('group2_mode').value = relayMode[1];
-
-            const names1 = document.getElementById('relay-names1');
-            const names2 = document.getElementById('relay-names2');
-            names1.innerHTML = '';
-            names2.innerHTML = '';
-
-            for (let i = 0; i < 16; i++) {
-                const div = document.createElement('div');
-                div.className = 'name-row';
-                div.innerHTML = `<span>${i+1}.</span><input type="text" id="relay_name_${i}" value="${relayNames[i]}">`;
-                if (i < 8) names1.appendChild(div);
-                else names2.appendChild(div);
-            }
+            syncSettingsNames();
         });
 }
 
@@ -151,29 +147,41 @@ function saveRelaySettings() {
 }
 
 // TRX functions
+function updateTrxBar(trx) {
+    const st = document.getElementById('sb-trx-state');
+    const fr = document.getElementById('sb-trx-freq');
+    if (st) {
+        st.textContent = trx.online ? '🟢 ONLINE' : '🔴 OFFLINE';
+        st.className = trx.online ? 'sb-on' : 'sb-off';
+    }
+    if (fr) fr.textContent = trx.online ? (trx.freq / 1000000).toFixed(3) + ' MHz' : '--';
+}
+
+function updateTrxPanel(t) {
+    const statusDiv = document.getElementById('trx-status');
+    const freqDiv = document.getElementById('trx-freq');
+    const bandDiv = document.getElementById('trx-band');
+    const modeDiv = document.getElementById('trx-mode');
+    if (t.online) {
+        statusDiv.innerHTML = '🟢 ONLINE';
+        statusDiv.className = 'status-online';
+        freqDiv.textContent = (t.freq / 1000000).toFixed(6) + ' MHz';
+    } else {
+        statusDiv.innerHTML = '🔴 OFFLINE';
+        statusDiv.className = 'status-offline';
+        freqDiv.textContent = '---.--- MHz';
+    }
+    bandDiv.textContent = 'Band: ' + t.band;
+    modeDiv.textContent = 'Mode: ' + t.mode;
+}
+
 function loadTrxState() {
     fetch('/trx/state')
         .then(r => r.json())
-        .then(data => {
-            const statusDiv = document.getElementById('trx-status');
-            const freqDiv = document.getElementById('trx-freq');
-            const bandDiv = document.getElementById('trx-band');
-            const modeDiv = document.getElementById('trx-mode');
-
-            if (data.online) {
-                statusDiv.innerHTML = '🟢 ONLINE';
-                statusDiv.className = 'status-online';
-                freqDiv.textContent = (data.freq / 1000000).toFixed(6) + ' MHz';
-            } else {
-                statusDiv.innerHTML = '🔴 OFFLINE';
-                statusDiv.className = 'status-offline';
-                freqDiv.textContent = '---.--- MHz';
-            }
-            bandDiv.textContent = 'Band: ' + data.band;
-            modeDiv.textContent = 'Mode: ' + data.mode;
-        })
+        .then(updateTrxPanel)
         .catch(() => {
-            document.getElementById('trx-status').innerHTML = '🔴 OFFLINE';
+            const s = document.getElementById('trx-status');
+            if (s) s.innerHTML = '🔴 OFFLINE';
         });
 }
 
@@ -418,13 +426,6 @@ function openCameraWindow() {
     showToast('Opening camera in new window', true);
 }
 
-// Auto-refresh TRX state every 2 seconds when TRX tab is active
-setInterval(() => {
-    const activePanel = document.querySelector('.panel.active');
-    if (activePanel && activePanel.id === 'trx-panel') {
-        loadTrxState();
-    }
-}, 2000);
 
 // ================= Audio functions =================
 function updateSpeakerVal() {
@@ -643,22 +644,39 @@ function loadLocalIp() {
         .catch(() => {});
 }
 
+function classifyRtt(rtt) {
+    if (rtt === null || rtt === undefined) return 'unknown';
+    if (rtt < 50) return 'good';
+    if (rtt < 100) return 'warning';
+    return 'bad';
+}
+
+function updateConnBar(c) {
+    const v = document.getElementById('sb-rtt-value');
+    if (v) v.textContent = c.rtt !== null && c.rtt !== undefined ? c.rtt.toFixed(1) + ' ms' : '--';
+}
+
+function updateConnPanel(c) {
+    const statusEl = document.getElementById('connection-status');
+    const valueEl = document.getElementById('rtt-value');
+    const timeEl = document.getElementById('timestamp');
+    if (!statusEl || !valueEl || !timeEl) return;
+    if (c.rtt !== null && c.rtt !== undefined) {
+        valueEl.textContent = c.rtt.toFixed(1) + ' ms';
+        statusEl.className = 'status-display ' + classifyRtt(c.rtt);
+    } else {
+        valueEl.textContent = '--';
+        statusEl.className = 'status-display bad';
+    }
+    timeEl.textContent = 'Last updated: ' + c.timestamp;
+}
+
 function updateConnectionStatus() {
     fetch('/status/connection')
         .then(r => r.json())
         .then(data => {
-            const statusEl = document.getElementById('connection-status');
-            const valueEl = document.getElementById('rtt-value');
-            const timeEl = document.getElementById('timestamp');
-
-            if (data.rtt !== null) {
-                valueEl.textContent = data.rtt.toFixed(1) + ' ms';
-                statusEl.className = 'status-display ' + data.status;
-            } else {
-                valueEl.textContent = '--';
-                statusEl.className = 'status-display bad';
-            }
-            timeEl.textContent = 'Last updated: ' + data.timestamp;
+            updateConnBar(data);
+            updateConnPanel(data);
         })
         .catch(() => {});
 }
@@ -769,16 +787,18 @@ document.querySelectorAll('.tab').forEach(tab => {
     });
 });
 
-// Auto-refresh connection status every 2 seconds when Config tab is active
-setInterval(() => {
-    const activePanel = document.querySelector('.panel.active');
-    if (activePanel && activePanel.id === 'config-panel') {
-        updateConnectionStatus();
-    }
-}, 2000);
 
 // ================= Band Relay functions =================
 let bandRules = [];
+
+function updateBandRelayState(b) {
+    const freqEl = document.getElementById('bandrelay-current-freq');
+    const relEl = document.getElementById('bandrelay-current-relays');
+    const enEl = document.getElementById('bandrelay-enabled');
+    if (freqEl) freqEl.textContent = b.freq_khz ? b.freq_khz.toFixed(1) : '---';
+    if (relEl) relEl.textContent = b.active_relays && b.active_relays.length ? b.active_relays.map(r => r+1).join(', ') : 'none';
+    if (enEl) enEl.checked = b.enabled;
+}
 
 function loadBandRules() {
     fetch('/bandrelay/rules')
@@ -788,16 +808,10 @@ function loadBandRules() {
             renderBandRules();
         })
         .catch(() => {});
-    // Also load current state
+    // Also load current state (kept fresh afterwards by SSE via updateBandRelayState)
     fetch('/bandrelay/state')
         .then(r => r.json())
-        .then(data => {
-            document.getElementById('bandrelay-current-freq').textContent =
-                data.freq_khz ? data.freq_khz.toFixed(1) : '---';
-            document.getElementById('bandrelay-current-relays').textContent =
-                data.active_relays.length ? data.active_relays.map(r => r+1).join(', ') : 'none';
-            document.getElementById('bandrelay-enabled').checked = data.enabled;
-        })
+        .then(updateBandRelayState)
         .catch(() => {});
 }
 
@@ -888,42 +902,45 @@ function saveBandRules() {
     }).catch(() => showToast('❌ Network error', false));
 }
 
-// Auto-refresh bandrelay state when TRX tab is active
-setInterval(() => {
-    const activePanel = document.querySelector('.panel.active');
-    if (activePanel && activePanel.id === 'trx-panel') {
-        fetch('/bandrelay/state')
-            .then(r => r.json())
-            .then(data => {
-                document.getElementById('bandrelay-current-freq').textContent =
-                    data.freq_khz ? data.freq_khz.toFixed(1) : '---';
-                document.getElementById('bandrelay-current-relays').textContent =
-                    data.active_relays.length ? data.active_relays.map(r => r+1).join(', ') : 'none';
-            })
-            .catch(() => {});
-    }
-}, 2000);
+// ================= Real-time updates via SSE =================
+// A single Server-Sent Events stream carries PTT, TRX, relay, client RTT and
+// band-relay current state to the page. Replaces the per-tab 2 s polling loops,
+// so updates arrive immediately and the device is polled far less often.
+function applyServerStatus(d) {
+    pttActive = !!d.ptt_active;
+    updatePttIndicator();
 
-// Auto-refresh relay state + PTT status on Main tab every 2 seconds
-setInterval(() => {
+    relayState = d.relay_state;
+    relayNames = d.names;
+    relayMode = d.mode;
+    document.getElementById('mode0_label').textContent = relayMode[0];
+    document.getElementById('mode1_label').textContent = relayMode[1];
+    renderRelays();
+
+    // Rebuild settings name inputs only when the Settings tab is visible
     const activePanel = document.querySelector('.panel.active');
-    if (activePanel && activePanel.id === 'main-panel') {
-        Promise.all([
-            fetch('/state').then(r => r.json()),
-            fetch('/ptt/status').then(r => r.json()),
-        ])
-            .then(([stateData, pttData]) => {
-                relayState = stateData.state;
-                relayNames = stateData.names;
-                relayMode = stateData.mode;
-                pttActive = pttData.active;
-                document.getElementById('mode0_label').textContent = relayMode[0];
-                document.getElementById('mode1_label').textContent = relayMode[1];
-                renderRelays();
-            })
-            .catch(() => {});
+    if (activePanel && activePanel.id === 'settings-panel') {
+        syncSettingsNames();
     }
-}, 2000);
+
+    updateTrxBar(d.trx);
+    updateTrxPanel(d.trx);
+    updateConnBar(d.connection);
+    updateConnPanel(d.connection);
+    updateBandRelayState(d.bandrelay);
+}
+
+const evtSource = new EventSource('/events');
+evtSource.onmessage = function(e) {
+    try {
+        applyServerStatus(JSON.parse(e.data));
+    } catch (err) {
+        // ignore a malformed frame
+    }
+};
+evtSource.onerror = function() {
+    // EventSource reconnects automatically; the UI keeps its last known state
+};
 
 // Initialize
 loadRelays();

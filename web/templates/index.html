@@ -9,6 +9,13 @@
 <body>
     <h1>NanoPi Controller</h1>
 
+    <!-- Persistent status bar (visible on every tab) -->
+    <div class="statusbar">
+        <div id="sb-ptt" class="sb-chip sb-ptt-off">● PTT: OFF</div>
+        <div id="sb-trx" class="sb-chip">TRX: <span id="sb-trx-state">--</span> <span id="sb-trx-freq">--</span></div>
+        <div id="sb-rtt" class="sb-chip">Client: <span id="sb-rtt-value">--</span></div>
+    </div>
+
     <div class="tabs">
         <div class="tab active" data-tab="main">Main</div>
         <div class="tab" data-tab="trx">TRX</div>
@@ -21,12 +28,6 @@
 
     <!-- Main Panel -->
     <div id="main-panel" class="panel active">
-        <div class="group" style="text-align:center;padding:12px;">
-            <div id="ptt-indicator" style="font-size:20px;font-weight:bold;padding:8px 16px;border-radius:8px;display:inline-block;">
-                PTT: OFF
-            </div>
-        </div>
-
         <div class="group">
             <h3>Group 1 (<span id="mode0_label">toggle</span>)</h3>
             <div id="relays1" class="relay-grid"></div>

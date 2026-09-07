@@ -1963,6 +1963,78 @@ def ptt_status_api():
     return jsonify({"active": ptt_active})
 
 
+# ================= LIVE STATUS (SSE) =================
+
+
+def _status_snapshot():
+    """Build a single aggregated snapshot of the live web-UI state. Sent to the
+    browser over SSE so the page can update instantly instead of polling the
+    server from multiple per-tab intervals."""
+    with status_lock:
+        rtt = current_rtt
+        ts = last_update
+
+    freq = radio_state.get("freq", 0)
+    bfreq = freq / 1000 if freq else 0
+
+    return {
+        "ptt_active": ptt_active,
+        "relay_state": get_state(),
+        "names": config.get("names", default_config["names"]),
+        "mode": config.get("group_mode", default_config["group_mode"]),
+        "trx": {
+            "freq": radio_state.get("freq", 0),
+            "band": radio_state.get("band", "Unknown"),
+            "mode": radio_state.get("mode", "Unknown"),
+            "online": radio_state.get("online", False),
+        },
+        "connection": {"rtt": rtt, "timestamp": ts},
+        "bandrelay": {
+            "freq_khz": round(bfreq, 1),
+            "active_relays": apply_band_rules(freq) if freq else [],
+            "enabled": band_relay_enabled,
+        },
+    }
+
+
+@app.route("/events")
+def sse_events():
+    """Server-Sent Events stream pushing the live state snapshot to the web UI.
+    Replaces the per-tab HTTP polling (PTT, TRX, relays, client RTT, band-relay
+    current state), so changes arrive immediately and the device is polled less.
+
+    A snapshot is emitted only when it actually changed (compared as JSON), so
+    an idle UI receives one small message per second at most.
+    """
+    if not auth():
+        return Response(status=403)
+
+    def generate():
+        last = None
+        while True:
+            try:
+                data = json.dumps(_status_snapshot())
+                if data != last:
+                    last = data
+                    yield f"data: {data}\n\n"
+                time.sleep(1)
+            except GeneratorExit:
+                break
+            except Exception as e:
+                print(f"[sse] error: {e}")
+                time.sleep(1)
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 # ================= MAIN =================
 
 
