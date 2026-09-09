@@ -917,7 +917,11 @@ def init_serial():
             decoder = KenwoodDecoder()
         else:
             decoder = CIVDecoder()
-        radio_state["online"] = True
+        # NOTE: we deliberately do NOT set online=True here. Opening the serial
+        # port only means the USB/RS232 adapter is present, not that a
+        # transceiver is attached and responding. "online" is set to True by
+        # the decoder when a valid CAT frame is received, and cleared by the
+        # poller when the radio stops answering.
 
         # Open UART1 for transparent CAT relay to local computer
         if trx_config.get("uart1_enabled", True):
@@ -1040,6 +1044,13 @@ async def poller():
             radio_state["online"] = False
             continue
 
+        # Mark the transceiver offline if it hasn't answered recently. This
+        # check must run in BOTH modes (UART1 relay on/off): opening the serial
+        # port does not prove a radio is attached — only an actual CAT response
+        # (which updates radio_state["last_rx"]) does.
+        if time.time() - radio_state["last_rx"] > 5:
+            radio_state["online"] = False
+
         # When the transparent UART1 relay is enabled, an external program
         # (flrig/TR4W/etc.) on the PC owns the polling. Our own IF;/CI-V
         # queries would interleave with its requests and corrupt the response
@@ -1058,9 +1069,6 @@ async def poller():
         # bridge must not flush or inject anything into the CAT port.
         if trx_config.get("uart1_enabled", True):
             continue
-
-        if time.time() - radio_state["last_rx"] > 5:
-            radio_state["online"] = False
 
         protocol = trx_config.get("protocol", "Icom")
         if protocol == "Kenwood":
@@ -1380,7 +1388,7 @@ def trx_reinit():
             # Re-init with current config
             success = init_serial()
         if success:
-            return jsonify({"status": "ok", "online": True, "port": trx_config["serial_port"]})
+            return jsonify({"status": "ok", "online": radio_state["online"], "port": trx_config["serial_port"]})
         else:
             return jsonify({"status": "error", "online": False, "message": "Failed to open port"}), 500
     except Exception as e:
