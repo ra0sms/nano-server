@@ -1,3 +1,11 @@
+## v1.2.1 (2026-09-09)
+- Group-scoped automatic relay switching: if the band rules only use relays 1-8 (or only 9-16), the other group is left untouched, so those relays can still be selected manually and their state survives every frequency change
+- Live web UI updates via Server-Sent Events (`/events`) replace the per-tab 2 s HTTP polling; a persistent status bar (PTT / TRX / client RTT) is now shown on every tab
+- Removed the fixed `/dev/ttyCAT` binding: the CAT serial port is chosen on the web Settings tab, and `fix_usb_ports.sh` is no longer used
+- Web panel no longer crashes when the I2C relay module is absent: the I2C bus and both expander addresses are probed safely at startup and every relay write is guarded
+- Fix TRX showing ONLINE when no transceiver is attached: `online` now reflects an actual CAT response (with a 5 s inactivity timeout) instead of merely an opened serial port
+
+
 ## v1.2.0 (2026-09-07)
    - Split the web panel UI out of app.py: HTML -> web/templates/index.html, CSS -> web/static/css/style.css, JS -> web/static/js/main.js, loads static assets via url_for instead of a huge inline template)
 
