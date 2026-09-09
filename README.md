@@ -34,7 +34,7 @@ Desktop client software: https://github.com/ra0sms/caesar-client-desktop
 | Audio | USB sound card (C-Media USB Audio Device) |
 | Camera | USB webcam on `/dev/video1` |
 | Relay board | 2× I2C GPIO expander at `0x20` / `0x21` |
-| CAT interface | USB-to-Serial on `/dev/ttyCAT` |
+| CAT interface | USB-to-Serial (port chosen in web Settings tab, e.g. `/dev/ttyUSB0`) |
 | CAT UART1 relay | Physical UART1 on `/dev/ttyS1` (pins 8-TX, 10-RX) |
 | CON LED | GPIO PC2 (line 66) |
 | PTT output | GPIO PC3 (line 67) |
@@ -114,13 +114,7 @@ Or use the web interface at `http://<server-ip>:5050/`.
 echo 'yourpassword' > /home/pi/nano-server/web/password.txt
 ```
 
-### 6. Set up the CAT USB port udev symlink (with transceiver connected)
-
-```bash
-sudo bash /home/pi/nano-server/fix_usb_ports.sh
-```
-
-### 7. (Optional) Fix ALSA card order
+### 6. (Optional) Fix ALSA card order
 
 If you have multiple USB audio devices (e.g., webcam with mic), the C-Media USB Audio card may not be card 0. Run:
 
@@ -129,7 +123,7 @@ sudo bash /home/pi/nano-server/fix_alsa_card_order.sh
 sudo reboot
 ```
 
-### 8. Reboot
+### 7. Reboot
 
 ```bash
 sudo reboot
@@ -226,16 +220,16 @@ When PTT is active (transmitting), all relay switching is automatically blocked 
 
 ### UART1 Transparent CAT Relay
 
-The server can transparently relay all CAT data between the transceiver (connected via USB-to-Serial on `/dev/ttyCAT`) and a local computer connected to the **UART1** physical port (`/dev/ttyS1`, pins 8-TX, 10-RX on NanoPi NEO). This allows two clients to share the same CAT connection simultaneously:
+The server can transparently relay all CAT data between the transceiver (connected via the USB-to-Serial CAT port selected in web Settings) and a local computer connected to the **UART1** physical port (`/dev/ttyS1`, pins 8-TX, 10-RX on NanoPi NEO). This allows two clients to share the same CAT connection simultaneously:
 
 - **Remote client** — connects via TCP port 3001 over the network
 - **Local computer** — connected directly via UART1 (e.g., a PC next to the server)
 
 **How it works:**
 
-1. All data received from the transceiver on `/dev/ttyCAT` is duplicated to both TCP clients and UART1
-2. All data received from UART1 is written back to `/dev/ttyCAT` (and thus forwarded to the transceiver)
-3. All data received from TCP clients is written to `/dev/ttyCAT` (existing behavior)
+1. All data received from the transceiver on the CAT port is duplicated to both TCP clients and UART1
+2. All data received from UART1 is written back to the CAT port (and thus forwarded to the transceiver)
+3. All data received from TCP clients is written to the CAT port (existing behavior)
 
 **Configuration** (in [`web/trx_config.json`](web/trx_config.json) or via web UI Settings tab):
 
@@ -412,7 +406,6 @@ nano-server/
 ├── install_server.sh              # Main installation script
 ├── setup_armbian_env.sh           # Patches /boot/armbianEnv.txt safely
 ├── restart_services_on_server.sh  # Restart all runtime services
-├── fix_usb_ports.sh               # Create /dev/ttyCAT udev symlink
 ├── fix_alsa_card_order.sh         # Fix USB audio card order via modprobe
 ├── setup_sudo_nopasswd.sh         # Configure sudoers for web panel self-restart
 ├── create_ser2net_yaml.sh         # Generate ser2net config

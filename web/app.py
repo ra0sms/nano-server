@@ -50,15 +50,24 @@ else:
 _PASSWORD_FILE = Path(__file__).with_name("password.txt")
 PASSWORD = _PASSWORD_FILE.read_text().strip() if _PASSWORD_FILE.exists() else "1234"
 
-# I2C for relays
-try:
-    bus = SMBus(0)
-except Exception as _e:
-    print(f"Warning: could not open I2C bus 0: {_e}")
-    bus = None
-
+# I2C for relays (PCF8574T expanders). The relay board is optional: the web
+# panel must keep running even when no I2C module is connected (e.g. during a
+# bare-NanoPi setup). So opening the bus AND probing both expander addresses
+# are wrapped in try/except — if anything fails, `bus` stays None and every
+# relay write is skipped instead of crashing the service.
 ADDR1 = 0x20
 ADDR2 = 0x21
+
+bus = None
+try:
+    _probe_bus = SMBus(0)
+    # Probing writes the initial all-off state, so this is safe on real hardware.
+    _probe_bus.write_byte(ADDR1, 0xFF)
+    _probe_bus.write_byte(ADDR2, 0xFF)
+    bus = _probe_bus
+    print("[relay] I2C OK: relay board detected")
+except Exception as _e:
+    print(f"Warning: I2C / relay board not available ({_e}); relay control disabled")
 
 state1 = 0xFF
 state2 = 0xFF
@@ -67,7 +76,9 @@ state2 = 0xFF
 TRX_CONFIG_FILE = Path(__file__).with_name("trx_config.json")
 
 default_trx_config = {
-    "serial_port": "/dev/ttyCAT",
+    # The CAT serial port is chosen by the user on the web Settings tab; an
+    # empty default means the TRX stays offline until a port is selected.
+    "serial_port": "",
     "baudrate": 19200,
     "protocol": "Icom",
     "radio_addr": 0x70,
@@ -107,10 +118,17 @@ ser_lock = threading.Lock()
 
 
 def apply():
+    """Write the relay states to the I2C expanders. No-op if the I2C bus was not
+    available at startup, and tolerant of a mid-run bus error (e.g. the relay
+    board being unplugged), so a missing/disconnected I2C module never crashes
+    the web service."""
     if bus is None:
         return
-    bus.write_byte(ADDR1, state1)
-    bus.write_byte(ADDR2, state2)
+    try:
+        bus.write_byte(ADDR1, state1)
+        bus.write_byte(ADDR2, state2)
+    except Exception as e:
+        print(f"[relay] I2C write failed: {e} (relay board disconnected?)")
 
 
 def get_state():
@@ -1028,7 +1046,7 @@ async def poller():
         # stream, so the PC cannot display the current frequency. Skip polling
         # in that case to keep the relay a clean transparent bridge.
         # When the transparent UART1 relay is enabled, this poller must NOT
-        # touch /dev/ttyCAT at all. The CAT stream belongs exclusively to the
+        # touch the CAT port at all. The CAT stream belongs exclusively to the
         # external program (JTDX/flrig/TR4W) talking through ttyS1, and the
         # serial_reader()/uart1_reader() threads carry it transparently.
         #
@@ -1334,16 +1352,12 @@ def trx_state():
 
 @app.route("/trx/ports")
 def trx_ports():
-    """Scan for available serial ports (ttyUSB* and ttyACM*)."""
+    """Scan for available serial ports (ttyUSB* and ttyACM*) plus UART1."""
     ports = []
     for pattern in ["/dev/ttyUSB*", "/dev/ttyACM*"]:
         for p in glob.glob(pattern):
             ports.append(p)
-    # Also include /dev/ttyCAT if it exists (symlink from fix_usb_ports.sh)
-    if os.path.exists("/dev/ttyCAT"):
-        if "/dev/ttyCAT" not in ports:
-            ports.append("/dev/ttyCAT")
-    # Include /dev/ttyS1 (UART1 on NanoPi)
+    # Include /dev/ttyS1 (UART1 on NanoPi, used for the transparent CAT relay)
     if os.path.exists("/dev/ttyS1"):
         if "/dev/ttyS1" not in ports:
             ports.append("/dev/ttyS1")
