@@ -29,7 +29,6 @@ from xmlrpc.server import SimpleXMLRPCServer
 from xmlrpc.server import SimpleXMLRPCRequestHandler
 
 import gpiod
-from gpiod.line import Direction, Value
 
 # ================= CONFIGURATION =================
 
@@ -97,25 +96,19 @@ cw_buffer = bytearray()
 cw_sending = False
 cw_send_lock = threading.Lock()
 
-# === GPIO Setup (gpiod v2 API) — single request for all lines ===
+# === GPIO Setup (libgpiod v1 API) — single request for all lines ===
+# Order matters for set_value(): index 0=CW, 1=CON, 2=PTT
+GPIO_LINE_CW_IDX = 0
+GPIO_LINE_CON_IDX = 1
+GPIO_LINE_PTT_IDX = 2
+
 try:
-    gpio_request = gpiod.request_lines(
-        CHIP_PATH,
+    chip = gpiod.Chip(CHIP_PATH)
+    gpio_lines = chip.get_lines([LINE_CW, LINE_CON, LINE_PTT])
+    gpio_lines.request(
         consumer=CONSUMER,
-        config={
-            LINE_CW: gpiod.LineSettings(
-                direction=Direction.OUTPUT,
-                output_value=Value.INACTIVE,
-            ),
-            LINE_CON: gpiod.LineSettings(
-                direction=Direction.OUTPUT,
-                output_value=Value.INACTIVE,
-            ),
-            LINE_PTT: gpiod.LineSettings(
-                direction=Direction.OUTPUT,
-                output_value=Value.INACTIVE,
-            ),
-        },
+        type=gpiod.LINE_REQ_DIR_OUT,
+        default_vals=[0, 0, 0],
     )
     print("✅ GPIO lines initialized (CW=PC1, CON=PC2, PTT=PC3).")
 except Exception as e:
@@ -161,7 +154,7 @@ def set_ptt(value: int):
         tune_hold_start = None
     if value != ptt_state:
         try:
-            gpio_request.set_value(LINE_PTT, Value.ACTIVE if value else Value.INACTIVE)
+            gpio_lines.set_value(GPIO_LINE_PTT_IDX, value)
             ptt_state = value
             print(f"📡 PTT {'ON' if value else 'OFF'} (GPIO={value})")
         except Exception as e:
@@ -325,13 +318,13 @@ def client_monitor():
         online = send_ping(client_ip) if client_ip != "0.0.0.0" else True
 
         if online:
-            gpio_request.set_value(LINE_CON, Value.ACTIVE)
+            gpio_lines.set_value(GPIO_LINE_CON_IDX, 1)
             if need_ser2net_reboot:
                 print("🔄 Client back online — restarting ser2net...")
                 os.system("systemctl restart ser2net.service")
                 need_ser2net_reboot = False
         else:
-            gpio_request.set_value(LINE_CON, Value.INACTIVE)
+            gpio_lines.set_value(GPIO_LINE_CON_IDX, 0)
             set_ptt(0)  # 🔒 FAIL-SAFE: disable PTT when client is gone
             need_ser2net_reboot = True
 
@@ -368,7 +361,7 @@ def ping_responder():
 def cw_set(value: int):
     """Set CW key line (1 = key down / mark, 0 = key up / space)."""
     try:
-        gpio_request.set_value(LINE_CW, Value.ACTIVE if value else Value.INACTIVE)
+        gpio_lines.set_value(GPIO_LINE_CW_IDX, 1 if value else 0)
     except Exception as e:
         print(f"[CW] ⚠️ GPIO error: {e}")
 
@@ -780,9 +773,9 @@ def signal_handler(sig, frame):
     # Ensure PTT and CW are OFF on exit
     set_ptt(0)
     cw_set(0)
-    gpio_request.set_value(LINE_CON, Value.INACTIVE)
+    gpio_lines.set_value(GPIO_LINE_CON_IDX, 0)
     # Release GPIO resources so the service can restart cleanly
-    gpio_request.release()
+    gpio_lines.release()
     print("👋 Goodbye.")
     sys.exit(0)
 
