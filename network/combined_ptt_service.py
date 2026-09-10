@@ -37,9 +37,11 @@ try:
 except ImportError:
     GPIOD_V2 = False  # libgpiod v1: gpiod is a single module (no gpiod.line)
 if GPIOD_V2:
-    print(f"ℹ️ Using libgpiod v2 bindings (gpiod {gpiod.__version__}).")
+    ver = getattr(gpiod, "__version__", "unknown")
+    print(f"ℹ️ Using libgpiod v2 bindings (gpiod {ver}).")
 else:
-    print(f"ℹ️ Using libgpiod v1 bindings (gpiod {gpiod.VERSION}).")
+    ver = getattr(gpiod, "VERSION", getattr(gpiod, "__version__", "unknown"))
+    print(f"ℹ️ Using libgpiod v1 bindings (gpiod {ver}).")
 
 # ================= CONFIGURATION =================
 
