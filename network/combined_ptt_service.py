@@ -96,20 +96,19 @@ cw_buffer = bytearray()
 cw_sending = False
 cw_send_lock = threading.Lock()
 
-# === GPIO Setup (libgpiod v1 API) — single request for all lines ===
-# Order matters for set_value(): index 0=CW, 1=CON, 2=PTT
-GPIO_LINE_CW_IDX = 0
-GPIO_LINE_CON_IDX = 1
-GPIO_LINE_PTT_IDX = 2
-
+# === GPIO Setup (libgpiod v1 API) — one Line per output ===
+# Each line is requested independently so set_value() works on a single Line.
 try:
     chip = gpiod.Chip(CHIP_PATH)
-    gpio_lines = chip.get_lines([LINE_CW, LINE_CON, LINE_PTT])
-    gpio_lines.request(
-        consumer=CONSUMER,
-        type=gpiod.LINE_REQ_DIR_OUT,
-        default_vals=[0, 0, 0],
-    )
+    line_cw  = chip.get_line(LINE_CW)
+    line_con = chip.get_line(LINE_CON)
+    line_ptt = chip.get_line(LINE_PTT)
+    for _line in (line_cw, line_con, line_ptt):
+        _line.request(
+            consumer=CONSUMER,
+            type=gpiod.LINE_REQ_DIR_OUT,
+            default_vals=[0],
+        )
     print("✅ GPIO lines initialized (CW=PC1, CON=PC2, PTT=PC3).")
 except Exception as e:
     print(f"❌ GPIO initialization failed: {e}")
@@ -154,7 +153,7 @@ def set_ptt(value: int):
         tune_hold_start = None
     if value != ptt_state:
         try:
-            gpio_lines[GPIO_LINE_PTT_IDX].set_value(value)
+            line_ptt.set_value(value)
             ptt_state = value
             print(f"📡 PTT {'ON' if value else 'OFF'} (GPIO={value})")
         except Exception as e:
@@ -318,13 +317,13 @@ def client_monitor():
         online = send_ping(client_ip) if client_ip != "0.0.0.0" else True
 
         if online:
-            gpio_lines[GPIO_LINE_CON_IDX].set_value(1)
+            line_con.set_value(1)
             if need_ser2net_reboot:
                 print("🔄 Client back online — restarting ser2net...")
                 os.system("systemctl restart ser2net.service")
                 need_ser2net_reboot = False
         else:
-            gpio_lines[GPIO_LINE_CON_IDX].set_value(0)
+            line_con.set_value(0)
             set_ptt(0)  # 🔒 FAIL-SAFE: disable PTT when client is gone
             need_ser2net_reboot = True
 
@@ -361,7 +360,7 @@ def ping_responder():
 def cw_set(value: int):
     """Set CW key line (1 = key down / mark, 0 = key up / space)."""
     try:
-        gpio_lines[GPIO_LINE_CW_IDX].set_value(1 if value else 0)
+        line_cw.set_value(1 if value else 0)
     except Exception as e:
         print(f"[CW] ⚠️ GPIO error: {e}")
 
@@ -773,9 +772,11 @@ def signal_handler(sig, frame):
     # Ensure PTT and CW are OFF on exit
     set_ptt(0)
     cw_set(0)
-    gpio_lines[GPIO_LINE_CON_IDX].set_value(0)
+    line_con.set_value(0)
     # Release GPIO resources so the service can restart cleanly
-    gpio_lines.release()
+    line_cw.release()
+    line_con.release()
+    line_ptt.release()
     print("👋 Goodbye.")
     sys.exit(0)
 
