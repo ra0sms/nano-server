@@ -246,12 +246,15 @@ The UART1 baudrate is automatically set to match the CAT port baudrate. If UART1
 
 **Poller behavior with the relay enabled:**
 
-When the UART1 transparent relay is enabled, the server's **internal CAT poller is automatically disabled**. This is intentional: the external program on the PC (e.g. **flrig**, **TR4W**, **Hamlib**) becomes the sole owner of the CAT bus. Without this, the server's own polling queries would interleave with the PC's requests on the same line and corrupt the response stream, so the PC would not be able to read the current frequency/mode.
+When the UART1 transparent relay is enabled, the CAT bus can be owned by an external program on the PC (e.g. **flrig**, **TR4W**, **Hamlib**). While the external program is **actively** exchanging data, the server's internal poller backs off so its queries do not interleave with the PC's requests on the same line and corrupt the response stream.
 
-- **Relay ON** → internal poller disabled; the PC program reads the transceiver directly, and the web **TRX tab** stays updated passively by decoding the responses that flow through the bridge (the transceiver is polled by the PC program).
+However, the server now **automatically resumes its own polling whenever the external program is silent or absent**:
+
+- **Relay ON + external program active** → the server's poller stays quiet; the PC program reads the transceiver directly, and the web **TRX tab** stays updated passively by decoding the responses that flow through the bridge.
+- **Relay ON + external program silent/absent** → after ~5 s without any frame from the external controller (via UART1 or a TCP client), the server takes over the port and polls the transceiver itself, so the web **TRX tab** still shows the live frequency/mode even when no PC program is running. As soon as the external program sends traffic again, the poller hands the port back within one poll cycle.
 - **Relay OFF** → internal poller enabled; the web interface queries the transceiver itself and updates the TRX tab even when no PC program is connected.
 
-> **Note:** With the relay ON, if no external program is actively polling the transceiver, the web TRX tab will keep the last received value (it no longer sends its own requests).
+This behavior applies to **both** CAT protocols (Icom CI-V and Kenwood).
 
 **Stability & auto-recovery:**
 

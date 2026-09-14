@@ -424,6 +424,31 @@ def dit_ms():
     return max(10, int(1200 / wpm))
 
 
+def dit_sec():
+    """Duration of a dit in seconds (used by the compensated CW timer)."""
+    # Mirrors dit_ms() but in seconds with sub-millisecond precision. The
+    # 10 ms floor only matters far above ~120 WPM.
+    return max(0.010, 1200.0 / max(wpm, 1) / 1000.0)
+
+
+def _wait_until(deadline):
+    """Block until `deadline` (an absolute time.monotonic() timestamp).
+
+    Sleeps most of the interval, then busy-waits the final ~2 ms. Because
+    time.sleep() can only overshoot (never wake early), a raw sleep per element
+    makes every dit/dah/gap slightly longer than nominal. Targeting an absolute
+    deadline and busy-waiting the tail makes each element land exactly on time,
+    regardless of scheduling/GIL latency.
+    """
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        if remaining > 0.002:
+            time.sleep(remaining - 0.001)
+        # else: busy-wait the tail — the loop above re-checks the clock
+
+
 # Morse code table: ASCII char -> (bits, length)
 # bits: 1 = mark (key down), 0 = space (key up), MSB first
 # Intra-character gap (between dit/dah) = 1 bit (0)
@@ -496,13 +521,21 @@ def char_to_cw_bits(char: str):
 
 
 def send_char(char: str):
-    """Send a single character as CW, blocking."""
+    """Send a single character as CW, blocking.
+
+    Uses deadline-based compensated timing: every element (dit, dah and gap) is
+    held for exactly `dit` seconds measured against an absolute time.monotonic()
+    deadline, with the final ~2 ms busy-waited. Unlike raw time.sleep(dit) this
+    absorbs the scheduling/GIL overshoot, so symbols don't stretch at low speeds.
+    """
+    dit = dit_sec()
+
     if char == " ":
         # Standard word gap is 7 dits total. The previous character already
         # left the key up for a 3-dit inter-character gap (below), so only
         # 4 more dits are needed here — sleeping the full 7 would stack on
         # top of that and produce a 10-dit gap instead.
-        time.sleep(dit_ms() * 4 / 1000)
+        _wait_until(time.monotonic() + dit * 4)
         return False
 
     morse = char_to_cw_bits(char)
@@ -510,25 +543,22 @@ def send_char(char: str):
         return False
 
     bits, length = morse
-    dit = dit_ms()
 
+    deadline = time.monotonic()
     for i in range(length):
         if shutdown_flag.is_set():
             return False
 
         bit = (bits >> (length - 1 - i)) & 1
+        cw_set(bit)
+        deadline += dit
+        _wait_until(deadline)
 
-        if bit:
-            cw_set(1)
-            time.sleep(dit / 1000)
-        else:
-            cw_set(0)
-            time.sleep(dit / 1000)
-
-    # Inter-character gap: key up for 3 dit (standard CW timing)
-    # The character always ends with a mark (1), so no trailing space exists
+    # Inter-character gap: key up for 3 dit (standard CW timing).
+    # The character always ends with a mark (1), so no trailing space exists.
     cw_set(0)
-    time.sleep(dit * 3 / 1000)
+    deadline += dit * 3
+    _wait_until(deadline)
 
     return True
 
