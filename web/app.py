@@ -118,6 +118,12 @@ external_cat_time = 0.0
 # considers the CAT port free and resumes its own polling.
 EXTERNAL_CAT_TIMEOUT = 5.0
 
+# If the radio has not answered at all for this long, the server forces its own
+# poll even while an external connection is considered active — e.g. a CAT bridge
+# is connected (Enable CAT) but no external program like flrig is actually polling,
+# so the web UI would otherwise show OFFLINE forever.
+FORCE_POLL_TIMEOUT = 10.0
+
 # Serialize writes to the CAT port (ser). pyserial write() is NOT thread-safe:
 # multiple threads (uart1_reader, tcp_client, poller) write to the same port,
 # and interleaved writes can corrupt the CAT frame and desynchronize the
@@ -1115,9 +1121,16 @@ async def poller():
         # can still show the live frequency/mode. As soon as external traffic
         # resumes, this check backs off and hands the port back to the external
         # program within one poll cycle.
-        if trx_config.get("uart1_enabled", True) and (
-            time.time() - external_cat_time
-        ) <= EXTERNAL_CAT_TIMEOUT:
+        # Defer to an external program only while it is actively talking to the
+        # radio. Additionally, if the radio has not answered at all for a long
+        # while (e.g. a CAT bridge is connected but no external software like
+        # flrig is actually polling), force our own poll so the web UI still
+        # shows the live frequency/mode.
+        if (
+            trx_config.get("uart1_enabled", True)
+            and (time.time() - external_cat_time) <= EXTERNAL_CAT_TIMEOUT
+            and (time.time() - radio_state["last_rx"]) <= FORCE_POLL_TIMEOUT
+        ):
             continue
 
         protocol = trx_config.get("protocol", "Icom")
