@@ -51,8 +51,9 @@ Client PC                          NanoPi NEO (Server)
                     UDP :5000  ──→  Audio RX (client → speaker)
                     UDP :5001  ──→  PTT commands (0/1)
                     UDP :5002  ←→   Ping / RTT monitoring
-                    UDP :5003  ──→  CW Keyer (Winkeyer protocol)
+                    UDP :5003  ──→  CW Keyer (Winkeyer protocol, UDP)
                     TCP :5050  ←──  Web UI (Flask): relays, TRX, band relay, audio, config, settings, update (live status over SSE)
+                    TCP :6789  ←──  CW XML-RPC (PyWinKeyerSerial / not1mm)
                     TCP :8081  ←──  MJPEG video stream
                     TCP :3001  ←──  CAT (Icom CI-V or Kenwood)
 
@@ -365,12 +366,26 @@ echo -ne '\x00\x19CQ CQ DE RA0SMS\x0a' | nc -u <server-ip> 5003
 
 ### XML-RPC interface (PyWinKeyerSerial / not1mm compatible)
 
-The service provides an **XML-RPC server on port 6789**, compatible with the [K6GTE PyWinKeyerSerial](https://github.com/mbridak/PyWinKeyerSerial) interface. This allows logging programs like **[not1mm](https://github.com/mbridak/not1mm)** to send CW directly to the server.
+The service provides an **XML-RPC server on TCP port 6789**, compatible with the [K6GTE PyWinKeyerSerial](https://github.com/mbridak/PyWinKeyerSerial) interface. This allows logging programs like **[not1mm](https://github.com/mbridak/not1mm)** to send CW directly to the server.
 
-In not1mm, configure:
+**Port 6789 is the CW connection used by not1mm.** In not1mm's CW settings this corresponds to `cwport = 6789` with `cwtype = 2` (`PyWinKeyerSerial`). The corresponding not1mm UI fields are:
 - **Settings → CW Interface → Type**: `PyWinKeyerSerial`
 - **Settings → CW Interface → IP**: `<server-ip>`
 - **Settings → CW Interface → Port**: `6789`
+
+> ⚠️ **Important — re-check not1mm.json manually after any IP change.** not1mm stores its CW server address in the **`cwip`** field of its settings file **`~/.config/not1mm/not1mm.json`**. If the IP address of this Nano Server changes, you must edit `cwip` in that file (and ideally restart not1mm), because **not1mm will not start / will fail to work if the configured `cwip` is unreachable**. The `cwport` (must be `6789`) and `cwtype` (must be `2`) are stored there as well.
+
+Example `~/.config/not1mm/not1mm.json` (relevant CW fields):
+
+```json
+{
+    "cwip": "10.0.1.16",
+    "cwport": 6789,
+    "cwtype": 2,
+    "useflrig": true,
+    "cw_speed": 30
+}
+```
 
 Available RPC methods:
 

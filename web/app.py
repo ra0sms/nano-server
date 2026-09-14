@@ -366,6 +366,12 @@ MAGIC_PHRASE = b"PING_RESPONSE"
 PTT_STATUS_PORT = 5004
 ptt_active = False
 
+# Client-app presence from combined_ptt_service (via UDP broadcast on port 5005).
+# True only while the client software is actually sending control traffic — NOT
+# merely reachable by ping to its IP.
+CLIENT_STATUS_PORT = 5005
+client_connected = False
+
 # Global variables for status
 current_rtt = None
 last_update = None
@@ -545,15 +551,22 @@ def update_status():
     global current_rtt, last_update, status_active
     while status_active:
         ip = get_ip_from_file(CLIENT_IP_FILE)
-        if ip:
+        if ip and client_connected:
+            # Only measure RTT when the client app is actually connected. If the
+            # client machine merely answers a ping (e.g. after "Disconnect"), we
+            # must NOT show a bogus RTT in the web panel.
             rtt = measure_udp_rtt(ip)
             with status_lock:
                 current_rtt = rtt
                 last_update = time.strftime("%H:%M:%S")
-        else:
+        elif not ip:
             with status_lock:
                 current_rtt = None
                 last_update = "No client IP configured"
+        else:
+            with status_lock:
+                current_rtt = None
+                last_update = "Client not connected"
         time.sleep(CHECK_INTERVAL)
 
 
@@ -568,6 +581,25 @@ def ptt_status_listener():
         try:
             data, _ = sock.recvfrom(1024)
             ptt_active = (data[0] == 1)
+        except socket.timeout:
+            continue
+        except Exception:
+            break
+    sock.close()
+
+
+def client_status_listener():
+    """Listen for client connected/disconnected broadcasts from combined_ptt_service
+    on UDP port 5005, and update whether a client app is actually connected."""
+    global client_connected
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", CLIENT_STATUS_PORT))
+    sock.settimeout(0.5)
+    print(f"[CON] 📡 Listening for client status on 127.0.0.1:{CLIENT_STATUS_PORT}...")
+    while True:
+        try:
+            data, _ = sock.recvfrom(1024)
+            client_connected = (data[0] == 1)
         except socket.timeout:
             continue
         except Exception:
@@ -2095,6 +2127,10 @@ async def main():
     # Start PTT status listener (UDP broadcast from combined_ptt_service)
     ptt_thread = threading.Thread(target=ptt_status_listener, daemon=True)
     ptt_thread.start()
+
+    # Start client-app presence listener (UDP broadcast from combined_ptt_service)
+    client_status_thread = threading.Thread(target=client_status_listener, daemon=True)
+    client_status_thread.start()
 
     # Start auto-reconnect thread for TRX serial port
     def auto_reconnect():

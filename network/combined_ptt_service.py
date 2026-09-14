@@ -80,6 +80,15 @@ TUNE_MAX_HOLD_SECONDS = 60
 # === PTT Status Broadcast (to web panel) ===
 PTT_STATUS_PORT = 5004  # UDP port for broadcasting PTT status to web panel on localhost
 
+# === Client app presence detection ===
+# The client application is considered "connected" while it keeps sending packets
+# on its control ports (PTT 5001 / CW 5003) from the authorized client IP within
+# CLIENT_PRESENCE_TIMEOUT. Unlike a ping to the client IP — which succeeds even
+# after the user pressed "Disconnect" — this reflects whether the client software
+# is actually active.
+CLIENT_PRESENCE_TIMEOUT = 5.0     # seconds of silence before "disconnected"
+CLIENT_STATUS_PORT = 5005         # UDP broadcast: client connected/disconnected -> web panel
+
 # === CW defaults ===
 WPM_DEFAULT = 20
 WPM_MIN = 5
@@ -89,6 +98,7 @@ MAX_BUFFER = 255
 # === State ===
 ptt_state = 0
 client_ip = "0.0.0.0"
+client_last_seen = 0.0       # monotonic timestamp of last packet from the client app
 need_ser2net_reboot = False
 shutdown_flag = threading.Event()
 
@@ -198,6 +208,15 @@ def broadcast_ptt_status(value: int):
         pass
 
 
+def broadcast_client_status(value: int):
+    """Broadcast client connected/disconnected status to web panel via UDP."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.sendto(bytes([1 if value else 0]), ("127.0.0.1", CLIENT_STATUS_PORT))
+    except Exception:
+        pass
+
+
 def set_ptt(value: int):
     """Thread-safe PTT update with hardware write"""
     global ptt_state, tune_hold_start
@@ -267,7 +286,7 @@ def ptt_server():
     If keepalive packets stop arriving for >PTT_KEEPALIVE_TIMEOUT, PTT is
     forced off as a fail-safe.
     """
-    global ptt_keepalive_last, ptt_keepalive_active, ptt_last_seq, ptt_seq_gap_detected
+    global ptt_keepalive_last, ptt_keepalive_active, ptt_last_seq, ptt_seq_gap_detected, client_last_seen
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((SERVER_IP, PTT_PORT))
@@ -284,6 +303,10 @@ def ptt_server():
                 if sender_ip != client_ip:
                     print(f"🔒 Ignored command from unauthorized IP: {sender_ip}")
                     continue
+
+                # Any valid packet from the authorized client proves the client
+                # application is actually connected (used for CON LED / web RTT).
+                client_last_seen = time.monotonic()
 
                 result = parse_ptt_packet(data)
                 if result[0] is None:
@@ -355,9 +378,16 @@ def send_ping(ip):
 
 
 def client_monitor():
-    """Monitor client reachability and manage CON/PTT state"""
+    """Monitor client app presence and manage CON/PTT state.
+
+    "Connected" means the client application is actively sending packets on its
+    control ports (PTT 5001 / CW 5003) from the authorized client IP within
+    CLIENT_PRESENCE_TIMEOUT. A plain ping to the client IP is NOT used here: the
+    client machine answers pings even after the user pressed "Disconnect", which
+    would leave the CON LED lit and the web panel showing a bogus RTT.
+    """
     global need_ser2net_reboot
-    prev_online = False
+    prev_online = None
 
     while not shutdown_flag.is_set():
         # Tune-mode watchdog: Winkeyer 0x1C / rpc_tuneon() hold PTT and the
@@ -368,7 +398,11 @@ def client_monitor():
             set_ptt(0)
             cw_set(0)
 
-        online = send_ping(client_ip) if client_ip != "0.0.0.0" else True
+        # Presence from actual client-app traffic, not ICMP/UDP ping to the IP.
+        online = (
+            client_ip != "0.0.0.0"
+            and (time.monotonic() - client_last_seen) <= CLIENT_PRESENCE_TIMEOUT
+        )
 
         if online:
             gpio.set_value(LINE_CON, 1)
@@ -380,6 +414,9 @@ def client_monitor():
             gpio.set_value(LINE_CON, 0)
             set_ptt(0)  # 🔒 FAIL-SAFE: disable PTT when client is gone
             need_ser2net_reboot = True
+
+        # Let the web panel know whether a client is actually connected.
+        broadcast_client_status(1 if online else 0)
 
         if online != prev_online:
             status = "✅ online" if online else "❌ offline"
@@ -720,6 +757,7 @@ def handle_winkeyer_command(data: bytes, sock: socket.socket, addr: tuple):
 
 def winkeyer_server():
     """UDP server listening for Winkeyer protocol commands on port 5003."""
+    global client_last_seen
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((SERVER_IP, WK_PORT))
@@ -736,6 +774,8 @@ def winkeyer_server():
                 if sender_ip != client_ip:
                     print(f"[CW] 🔒 Ignored Winkeyer command from unauthorized IP: {sender_ip}")
                     continue
+                # CW traffic from the authorized client also proves presence.
+                client_last_seen = time.monotonic()
                 if data:
                     handle_winkeyer_command(data, sock, addr)
             except socket.timeout:
@@ -890,7 +930,7 @@ if __name__ == "__main__":
     print(f"   • Ping responder      : UDP port {PING_PORT}")
     print(f"   • CW Keyer (Winkeyer) : UDP port {WK_PORT}")
     print(f"   • XML-RPC (logging)   : TCP port {XMLRPC_PORT}")
-    print(f"   • Client monitor      : pings {client_ip}:{PING_PORT} every {CHECK_INTERVAL}s")
+    print(f"   • Client monitor      : presence via {client_ip}:{PTT_PORT}/{WK_PORT} every {CHECK_INTERVAL}s")
     print(f"   • GPIO lines          : CW=PC1({LINE_CW}), CON=PC2({LINE_CON}), PTT=PC3({LINE_PTT})")
     print("   • Send SIGHUP to reload client_ip.cfg without restart")
     print("   • Press Ctrl+C to exit")
