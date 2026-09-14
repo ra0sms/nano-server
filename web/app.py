@@ -114,13 +114,16 @@ loop = None
 # CI-V / IF polling without corrupting the stream.
 external_cat_time = 0.0
 
-# How long (seconds) an external controller must be silent before the server
-# resumes its own polling. Kept short (1 s) so the server polls freely between
-# external bursts: otherwise an idle-but-connected CAT bridge (Enable CAT with no
-# flrig actively polling) would leave the web UI showing OFFLINE for the whole
-# window, and a roughly-equal back-off period can even oscillate with the radio's
-# response cadence (freq flickers offline every ~5 s).
-EXTERNAL_CAT_TIMEOUT = 1.0
+# Frame-collision guard: how long after an external program writes a frame the
+# server must wait before injecting its own query, so we never interleave
+# mid-frame. Kept tiny (0.3 s) so the server still polls freely between external
+# bursts and the web frequency stays live even with an idle CAT bridge.
+EXTERNAL_CAT_TIMEOUT = 0.3
+
+# How recently (seconds) the radio must have answered for the server to treat the
+# frequency as "already fresh" (i.e. an external program like flrig is polling
+# through the relay) and skip its own poll. Larger than the poll cadence.
+RADIO_FRESH_TIMEOUT = 2.0
 
 # Serialize writes to the CAT port (ser). pyserial write() is NOT thread-safe:
 # multiple threads (uart1_reader, tcp_client, poller) write to the same port,
@@ -1119,19 +1122,20 @@ async def poller():
         # can still show the live frequency/mode. As soon as external traffic
         # resumes, this check backs off and hands the port back to the external
         # program within one poll cycle.
-        # Transparent-relay ownership check. When the UART1 relay (and/or a TCP
-        # client) is enabled, an external program on the PC is meant to own the
-        # CAT port, and our own IF;/CI-V queries must NOT interleave with its
-        # active traffic.
-        #
-        # We defer only very briefly (EXTERNAL_CAT_TIMEOUT) after the external
-        # program writes a frame, so we never inject mid-frame. Between external
-        # bursts the server polls on its own schedule and the web UI always shows
-        # the live frequency — including when an external connection is connected
-        # but idle (e.g. a CAT bridge with no flrig polling).
+        # 1) Frame-collision guard: if an external program wrote a frame within
+        #    the last ~EXTERNAL_CAT_TIMEOUT, don't inject our own query right now.
+        #    The window is tiny so the server still polls between external bursts.
         if trx_config.get("uart1_enabled", True) and (
             time.time() - external_cat_time
         ) <= EXTERNAL_CAT_TIMEOUT:
+            continue
+
+        # 2) If the radio answered very recently, an external program (flrig/
+        #    JTDX) is already keeping the frequency fresh through the relay, so
+        #    skip our own poll. Otherwise the server polls the radio itself, so
+        #    the web UI always shows the live value — including when an external
+        #    connection is connected but idle (e.g. a CAT bridge, no flrig).
+        if (time.time() - radio_state["last_rx"]) <= RADIO_FRESH_TIMEOUT:
             continue
 
         protocol = trx_config.get("protocol", "Icom")
