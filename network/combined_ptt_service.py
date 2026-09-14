@@ -380,11 +380,12 @@ def send_ping(ip):
 def client_monitor():
     """Monitor client app presence and manage CON/PTT state.
 
-    "Connected" means the client application is actively sending packets on its
-    control ports (PTT 5001 / CW 5003) from the authorized client IP within
-    CLIENT_PRESENCE_TIMEOUT. A plain ping to the client IP is NOT used here: the
-    client machine answers pings even after the user pressed "Disconnect", which
-    would leave the CON LED lit and the web panel showing a bogus RTT.
+    "Connected" means the client application is actively alive: it sends a
+    ServerMonitor heartbeat (PING_REQUEST on port 5002) every second, plus PTT/CW
+    control traffic, from the authorized client IP within CLIENT_PRESENCE_TIMEOUT.
+    A plain ICMP/UDP ping to the client IP is NOT used: the client machine answers
+    pings even after the user pressed "Disconnect", which would leave the CON LED
+    lit and the web panel showing a bogus RTT.
     """
     global need_ser2net_reboot
     prev_online = None
@@ -427,7 +428,15 @@ def client_monitor():
 
 
 def ping_responder():
-    """Reply PING_RESPONSE to any PING_REQUEST — lets the client measure RTT."""
+    """Reply PING_RESPONSE to any PING_REQUEST — lets the client measure RTT.
+
+    Also doubles as the primary "client is connected" signal. The client's
+    ServerMonitor sends a PING_REQUEST to this port every second while the app is
+    connected (and stops the moment "Disconnect" is pressed), so receiving one
+    from the authorized client IP means the client application is actually
+    active — unlike the PTT/CW ports, which only carry traffic during actions.
+    """
+    global client_last_seen
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", PING_PORT))
     print(f"🏓 Ping responder listening on port {PING_PORT}...")
@@ -435,8 +444,12 @@ def ping_responder():
         try:
             sock.settimeout(0.5)
             data, addr = sock.recvfrom(1024)
+            sender_ip, _ = addr
             if data == b"PING_REQUEST":
                 sock.sendto(b"PING_RESPONSE", addr)
+                if sender_ip == client_ip:
+                    # Client app heartbeat (ServerMonitor) — proves it's connected.
+                    client_last_seen = time.monotonic()
         except socket.timeout:
             continue
         except Exception as e:
