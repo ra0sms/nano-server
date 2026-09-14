@@ -114,15 +114,13 @@ loop = None
 # CI-V / IF polling without corrupting the stream.
 external_cat_time = 0.0
 
-# How long (seconds) an external controller may stay silent before the server
-# considers the CAT port free and resumes its own polling.
-EXTERNAL_CAT_TIMEOUT = 5.0
-
-# If the radio has not answered at all for this long, the server forces its own
-# poll even while an external connection is considered active — e.g. a CAT bridge
-# is connected (Enable CAT) but no external program like flrig is actually polling,
-# so the web UI would otherwise show OFFLINE forever.
-FORCE_POLL_TIMEOUT = 10.0
+# How long (seconds) an external controller must be silent before the server
+# resumes its own polling. Kept short (1 s) so the server polls freely between
+# external bursts: otherwise an idle-but-connected CAT bridge (Enable CAT with no
+# flrig actively polling) would leave the web UI showing OFFLINE for the whole
+# window, and a roughly-equal back-off period can even oscillate with the radio's
+# response cadence (freq flickers offline every ~5 s).
+EXTERNAL_CAT_TIMEOUT = 1.0
 
 # Serialize writes to the CAT port (ser). pyserial write() is NOT thread-safe:
 # multiple threads (uart1_reader, tcp_client, poller) write to the same port,
@@ -1121,16 +1119,19 @@ async def poller():
         # can still show the live frequency/mode. As soon as external traffic
         # resumes, this check backs off and hands the port back to the external
         # program within one poll cycle.
-        # Defer to an external program only while it is actively talking to the
-        # radio. Additionally, if the radio has not answered at all for a long
-        # while (e.g. a CAT bridge is connected but no external software like
-        # flrig is actually polling), force our own poll so the web UI still
-        # shows the live frequency/mode.
-        if (
-            trx_config.get("uart1_enabled", True)
-            and (time.time() - external_cat_time) <= EXTERNAL_CAT_TIMEOUT
-            and (time.time() - radio_state["last_rx"]) <= FORCE_POLL_TIMEOUT
-        ):
+        # Transparent-relay ownership check. When the UART1 relay (and/or a TCP
+        # client) is enabled, an external program on the PC is meant to own the
+        # CAT port, and our own IF;/CI-V queries must NOT interleave with its
+        # active traffic.
+        #
+        # We defer only very briefly (EXTERNAL_CAT_TIMEOUT) after the external
+        # program writes a frame, so we never inject mid-frame. Between external
+        # bursts the server polls on its own schedule and the web UI always shows
+        # the live frequency — including when an external connection is connected
+        # but idle (e.g. a CAT bridge with no flrig polling).
+        if trx_config.get("uart1_enabled", True) and (
+            time.time() - external_cat_time
+        ) <= EXTERNAL_CAT_TIMEOUT:
             continue
 
         protocol = trx_config.get("protocol", "Icom")
