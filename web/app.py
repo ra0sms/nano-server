@@ -107,6 +107,17 @@ clients = set()
 decoder = None
 loop = None
 
+# Timestamp (time.time()) of the most recent CAT frame an external controller
+# sent toward the radio — either through the UART1 transparent relay or a TCP
+# client. The poller uses this to tell whether an external program currently
+# owns the CAT port, so the server knows when it is safe to run its own
+# CI-V / IF polling without corrupting the stream.
+external_cat_time = 0.0
+
+# How long (seconds) an external controller may stay silent before the server
+# considers the CAT port free and resumes its own polling.
+EXTERNAL_CAT_TIMEOUT = 5.0
+
 # Serialize writes to the CAT port (ser). pyserial write() is NOT thread-safe:
 # multiple threads (uart1_reader, tcp_client, poller) write to the same port,
 # and interleaved writes can corrupt the CAT frame and desynchronize the
@@ -987,12 +998,16 @@ def serial_reader(loop_ref):
 
 def uart1_reader():
     """Read data from UART1 and write to the CAT serial port (transparent relay)."""
-    global ser, ser_uart1
+    global ser, ser_uart1, external_cat_time
     while True:
         if ser_uart1 and ser_uart1.is_open and ser and ser.is_open:
             try:
                 data = ser_uart1.read(1024)
                 if data:
+                    # This frame came FROM the external program (through UART1)
+                    # and is headed TO the radio: remember that the external
+                    # program is actively using the CAT port.
+                    external_cat_time = time.time()
                     with ser_lock:
                         ser.write(data)
             except Exception as e:
@@ -1015,6 +1030,7 @@ async def broadcast(data):
 
 
 async def tcp_client(reader, writer):
+    global external_cat_time
     addr = writer.get_extra_info("peername")
     clients.add(writer)
     try:
@@ -1023,6 +1039,9 @@ async def tcp_client(reader, writer):
             if not data:
                 break
             if ser and ser.is_open:
+                # A TCP client acts like an external controller: mark the CAT
+                # port as busy so the poller backs off while it's active.
+                external_cat_time = time.time()
                 with ser_lock:
                     ser.write(data)
     except:
@@ -1051,23 +1070,22 @@ async def poller():
         if time.time() - radio_state["last_rx"] > 5:
             radio_state["online"] = False
 
-        # When the transparent UART1 relay is enabled, an external program
-        # (flrig/TR4W/etc.) on the PC owns the polling. Our own IF;/CI-V
-        # queries would interleave with its requests and corrupt the response
-        # stream, so the PC cannot display the current frequency. Skip polling
-        # in that case to keep the relay a clean transparent bridge.
-        # When the transparent UART1 relay is enabled, this poller must NOT
-        # touch the CAT port at all. The CAT stream belongs exclusively to the
-        # external program (JTDX/flrig/TR4W) talking through ttyS1, and the
-        # serial_reader()/uart1_reader() threads carry it transparently.
+        # Transparent-relay ownership check. When the UART1 relay (and/or a TCP
+        # client) is enabled, an external program on the PC is meant to own the
+        # CAT port, and our own IF;/CI-V queries must NOT interleave with its
+        # active traffic — that would corrupt the response stream and confuse
+        # the PC software (flrig/JTDX/TR4W etc.), exactly like the old
+        # reset_input_buffer() watchdog did.
         #
-        # IMPORTANT: the old "watchdog" here called ser.reset_input_buffer()
-        # every 0.5s. That was a race with serial_reader() and could silently
-        # discard a legitimate transceiver response before it reached JTDX,
-        # which looks exactly like an intermittent CAT disconnect and later
-        # produces a stream of '?;' from the transceiver. A true transparent
-        # bridge must not flush or inject anything into the CAT port.
-        if trx_config.get("uart1_enabled", True):
+        # BUT if the external program is silent or absent (it hasn't sent any
+        # frame toward the radio for EXTERNAL_CAT_TIMEOUT seconds), the port is
+        # free: the server takes over and polls the radio itself so the web UI
+        # can still show the live frequency/mode. As soon as external traffic
+        # resumes, this check backs off and hands the port back to the external
+        # program within one poll cycle.
+        if trx_config.get("uart1_enabled", True) and (
+            time.time() - external_cat_time
+        ) <= EXTERNAL_CAT_TIMEOUT:
             continue
 
         protocol = trx_config.get("protocol", "Icom")
