@@ -17,7 +17,7 @@ Desktop client software: https://github.com/ra0sms/caesar-client-desktop
 - 🌐 **Web interface** — relays, TRX, band relay rules, audio, config, settings, self-update (single UI on port 5050)
 - 🔗 **CAT interface** forwarding over TCP (Icom CI-V and Kenwood protocols)
 - 🔄 **UART1 transparent relay** — CAT data duplicated to physical UART1 port for local computer access
-- 🔒 **Fail-safe** — PTT is forced OFF when client disconnects
+- 🔒 **Fail-safe** — PTT is forced OFF when client disconnects; a CW message in progress is stopped and the CW key line released too (with break-in the radio would otherwise keep transmitting on the key alone)
 - 🚫 **PTT Lock** — relay switching (manual and band relay) is blocked while PTT is active to prevent accidental antenna switching during transmission
 - 🎛️ **Band Relay Rules** — automatic relay switching based on transceiver frequency
 - 🔑 **CW Keyer** — Winkeyer protocol over UDP, generates Morse code on GPIO PC1
@@ -180,7 +180,7 @@ Example:
 - `1840-1900` kHz → relays 3, 4
 - `7000-7300` kHz → relays 5, 6
 
-Auto-switching can be toggled on/off via a checkbox in the TRX tab.
+Auto-switching can be toggled on/off via a checkbox in the TRX tab. Rules are validated on the server (numeric `from < to` in kHz, relay numbers 1–16); if `web/band_rules.json` is unreadable at startup, it is renamed to `band_rules.json.invalid` and the default rules are used.
 
 **Group-scoped auto-switching:** auto-switching only touches the relay group(s) that the configured rules actually reference, leaving the other group fully manual:
 
@@ -228,6 +228,7 @@ When PTT is active (transmitting), all relay switching is automatically blocked 
 - Manual relay toggle via web UI buttons
 - Automatic band relay switching when transceiver frequency changes
 - Direct API calls to `POST /toggle/<n>` (server-side check)
+- **Retuning from the web UI** — frequency step, band buttons and `/trx/set_freq`: band relays can't follow during TX, so a band change would leave the transmitter keyed into the previous band's antenna (the request is refused with HTTP 409 and a message in the UI). Frequency steps are also refused while the transceiver is offline, instead of stepping from a made-up frequency
 
 ---
 

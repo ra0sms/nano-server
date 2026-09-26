@@ -4,6 +4,7 @@ import glob
 import hmac
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -284,17 +285,54 @@ band_rules = []
 band_relay_enabled = True  # Global toggle for automatic relay switching
 
 
+def validate_band_rules(rules):
+    """Check band relay rules. Returns (normalized_rules, None) or
+    (None, error message).
+
+    Rules are evaluated on every CAT frequency reading, so a malformed rule
+    (e.g. a string "from") must never get into band_rules: comparing it with
+    the frequency would raise inside the CAT reader thread."""
+    if not isinstance(rules, list):
+        return None, "expected an array of rules"
+    normalized = []
+    for i, rule in enumerate(rules, 1):
+        if not isinstance(rule, dict) or not {"from", "to", "relays"} <= rule.keys():
+            return None, f"rule {i}: must have 'from', 'to' and 'relays'"
+        lo, hi, relays = rule["from"], rule["to"], rule["relays"]
+        for v in (lo, hi):
+            # bool is a subclass of int; NaN/Infinity are accepted by json.loads
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+                return None, f"rule {i}: 'from' and 'to' must be numbers (kHz)"
+        if not 0 <= lo < hi:
+            return None, f"rule {i}: 'from' must be >= 0 and less than 'to'"
+        if not isinstance(relays, list):
+            return None, f"rule {i}: 'relays' must be an array"
+        for r in relays:
+            if isinstance(r, bool) or not isinstance(r, int) or not 0 <= r <= 15:
+                return None, f"rule {i}: invalid relay index {r!r}"
+        normalized.append({"from": lo, "to": hi, "relays": relays})
+    return normalized, None
+
+
 def load_band_rules():
     global band_rules
     if BAND_RULES_FILE.exists():
         try:
             with open(BAND_RULES_FILE, "r") as f:
-                band_rules = json.load(f)
-            # Validate structure
-            for rule in band_rules:
-                if "from" not in rule or "to" not in rule or "relays" not in rule:
-                    raise ValueError("Invalid rule structure")
-        except Exception:
+                rules, error = validate_band_rules(json.load(f))
+            if error:
+                raise ValueError(error)
+            band_rules = rules
+        except Exception as e:
+            # Keep the unreadable file for the user instead of silently
+            # losing their rules when the defaults are written over it.
+            backup = BAND_RULES_FILE.with_suffix(".json.invalid")
+            print(f"[bandrelay] ⚠️ {BAND_RULES_FILE.name} is invalid ({e}); "
+                  f"using default rules, old file saved as {backup.name}")
+            try:
+                os.replace(BAND_RULES_FILE, backup)
+            except Exception:
+                pass
             band_rules = default_band_rules.copy()
             save_band_rules()
     else:
@@ -686,42 +724,58 @@ def update_status():
         time.sleep(CHECK_INTERVAL)
 
 
+def _udp_status_listener(port, tag, what, on_value):
+    """Receive 1-byte status datagrams from combined_ptt_service on
+    127.0.0.1:<port> and pass the byte to on_value().
+
+    Never gives up: any error (including failing to bind at startup) is logged
+    and the socket is reopened after a second. A dead PTT listener would
+    otherwise leave the PTT state "unknown" — i.e. every relay locked — until
+    the web panel is restarted."""
+    while True:
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(("127.0.0.1", port))
+            sock.settimeout(0.5)
+            print(f"[{tag}] 📡 Listening for {what} on 127.0.0.1:{port}...")
+            while True:
+                try:
+                    data, _ = sock.recvfrom(1024)
+                except socket.timeout:
+                    continue
+                if data:
+                    on_value(data[0])
+        except Exception as e:
+            print(f"[{tag}] ⚠️ {what} listener error: {e}; retrying in 1 s")
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            time.sleep(1)
+
+
+def _on_ptt_status(value):
+    global ptt_active, ptt_status_time
+    ptt_active = (value == 1)
+    ptt_status_time = time.monotonic()
+
+
+def _on_client_status(value):
+    global client_connected
+    client_connected = (value == 1)
+
+
 def ptt_status_listener():
     """Listen for PTT status broadcasts from combined_ptt_service on UDP port 5004."""
-    global ptt_active, ptt_status_time
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(("127.0.0.1", PTT_STATUS_PORT))
-    sock.settimeout(0.5)
-    print(f"[PTT] 📡 Listening for PTT status on 127.0.0.1:{PTT_STATUS_PORT}...")
-    while True:
-        try:
-            data, _ = sock.recvfrom(1024)
-            ptt_active = (data[0] == 1)
-            ptt_status_time = time.monotonic()
-        except socket.timeout:
-            continue
-        except Exception:
-            break
-    sock.close()
+    _udp_status_listener(PTT_STATUS_PORT, "PTT", "PTT status", _on_ptt_status)
 
 
 def client_status_listener():
     """Listen for client connected/disconnected broadcasts from combined_ptt_service
     on UDP port 5005, and update whether a client app is actually connected."""
-    global client_connected
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(("127.0.0.1", CLIENT_STATUS_PORT))
-    sock.settimeout(0.5)
-    print(f"[CON] 📡 Listening for client status on 127.0.0.1:{CLIENT_STATUS_PORT}...")
-    while True:
-        try:
-            data, _ = sock.recvfrom(1024)
-            client_connected = (data[0] == 1)
-        except socket.timeout:
-            continue
-        except Exception:
-            break
-    sock.close()
+    _udp_status_listener(CLIENT_STATUS_PORT, "CON", "client status", _on_client_status)
 
 
 def percent_to_alsa(vol_percent):
@@ -1266,6 +1320,7 @@ def serial_reader(loop_ref):
     # Frames are forwarded whole so replies to the server's own requests can
     # be filtered out (see _should_forward).
     assembler = CatFrameAssembler()
+    last_decode_error = 0.0
     while True:
         if ser and ser.is_open:
             try:
@@ -1274,15 +1329,6 @@ def serial_reader(loop_ref):
                 # the full timeout on every short CAT reply, delaying each one by
                 # up to 100 ms on its way to JTDX/flrig and UART1.
                 data = ser.read(ser.in_waiting or 1)
-                if data:
-                    # Decode for web UI
-                    if decoder:
-                        decoder.feed(data)
-                    # Forward to TCP clients and UART1 (local computer)
-                    _forward_from_radio(assembler.feed(data), loop_ref)
-                stale = assembler.take_stale()
-                if stale:
-                    _forward_from_radio([stale], loop_ref)
             except Exception as e:
                 print(f"[TRX] Read error: {e}")
                 radio_state["online"] = False
@@ -1299,6 +1345,28 @@ def serial_reader(loop_ref):
                     if not init_serial():
                         print("[TRX] Auto-reconnect failed; will retry in 5s")
                         time.sleep(5)
+                continue
+
+            # Processing is kept out of the try above on purpose: a bug in
+            # decoding or in what a decoded frame triggers (band relays, CAT
+            # PTT) must not be mistaken for a port failure and make the CAT
+            # port reopen on every frame. Forwarding comes first so external
+            # programs keep working even if decoding fails.
+            try:
+                if data:
+                    # Forward to TCP clients and UART1 (local computer)
+                    _forward_from_radio(assembler.feed(data), loop_ref)
+                    # Decode for web UI
+                    if decoder:
+                        decoder.feed(data)
+                stale = assembler.take_stale()
+                if stale:
+                    _forward_from_radio([stale], loop_ref)
+            except Exception as e:
+                now = time.monotonic()
+                if now - last_decode_error > 10:  # don't flood the log at the CAT rate
+                    last_decode_error = now
+                    print(f"[TRX] ⚠️ CAT processing error (port stays open): {e!r}")
         else:
             time.sleep(1)
 
@@ -1671,19 +1739,10 @@ def bandrelay_save_rules():
     if not auth():
         return "no auth", 403
     global band_rules
-    data = request.json
-    if not isinstance(data, list):
-        return "Invalid data: expected array", 400
-    # Validate
-    for rule in data:
-        if "from" not in rule or "to" not in rule or "relays" not in rule:
-            return "Invalid rule structure", 400
-        if not isinstance(rule["relays"], list):
-            return "relays must be an array", 400
-        for r in rule["relays"]:
-            if not isinstance(r, int) or r < 0 or r > 15:
-                return f"Invalid relay index: {r}", 400
-    band_rules = data
+    rules, error = validate_band_rules(request.json)
+    if error:
+        return f"Invalid band rules: {error}", 400
+    band_rules = rules
     save_band_rules()
     reset_band_relay_tracking()
     return "ok"
@@ -1914,15 +1973,36 @@ def _set_transceiver_freq(freq_hz):
     radio_state["band"] = freq_to_band(freq_hz)
 
 
+def _qsy_blocked():
+    """Retuning from the web UI is refused while relay switching is locked by
+    PTT: band relays can't follow during TX, so a band change would leave the
+    transmitter keyed into the previous band's antenna. Returns an error
+    response, or None if retuning is allowed."""
+    reason = ptt_lock_reason()
+    if reason == "unknown":
+        return "No PTT status from ptt_server — frequency change blocked", 409
+    if reason:
+        return "PTT active — frequency change blocked", 409
+    return None
+
+
+def _is_number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
 @app.route("/trx/set_freq", methods=["POST"])
 def trx_set_freq():
     """Set transceiver frequency (Hz)."""
     if not auth():
         return "no auth", 403
+    blocked = _qsy_blocked()
+    if blocked:
+        return blocked
     data = request.json
     freq_hz = data.get("freq", 0)
-    if freq_hz < 100000 or freq_hz > 3000000000:
+    if not _is_number(freq_hz) or freq_hz < 100000 or freq_hz > 3000000000:
         return "Invalid frequency", 400
+    freq_hz = int(freq_hz)
 
     _set_transceiver_freq(freq_hz)
     return jsonify({"freq": freq_hz, "band": radio_state["band"]})
@@ -1933,12 +2013,19 @@ def trx_freq_step():
     """Change frequency by a step in Hz (positive or negative)."""
     if not auth():
         return "no auth", 403
+    blocked = _qsy_blocked()
+    if blocked:
+        return blocked
     data = request.json
     step = data.get("step", 0)
+    if not _is_number(step):
+        return "Invalid step", 400
     current_freq = radio_state.get("freq", 0)
-    if current_freq == 0:
-        current_freq = 7100000  # default to 40m if unknown
-    new_freq = current_freq + step
+    if current_freq == 0 or not radio_state.get("online"):
+        # Stepping from a made-up base frequency would move the radio to an
+        # unexpected band.
+        return "Transceiver frequency unknown (TRX offline)", 409
+    new_freq = int(current_freq + step)
     # Clamp to valid range
     new_freq = max(100000, min(3000000000, new_freq))
 
@@ -1951,6 +2038,9 @@ def trx_set_band():
     """Set frequency to the configured target frequency for an amateur band."""
     if not auth():
         return "no auth", 403
+    blocked = _qsy_blocked()
+    if blocked:
+        return blocked
     data = request.json
     band_name = data.get("band", "")
 

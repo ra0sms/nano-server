@@ -202,13 +202,13 @@ function freqStep(step) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({step: step})
     })
-    .then(r => r.json())
+    .then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); }))
     .then(data => {
         const stepLabel = step >= 0 ? '+' + step : '' + step;
         showToast('📡 Freq: ' + (data.freq / 1000000).toFixed(6) + ' MHz (' + stepLabel + ' Hz)', true);
         loadTrxState();
     })
-    .catch(() => showToast('❌ Failed to change frequency', false));
+    .catch(e => showToast('❌ ' + (e.message || 'Failed to change frequency'), false));
 }
 
 function setBand(band) {
@@ -217,15 +217,12 @@ function setBand(band) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({band: band})
     })
-    .then(r => {
-        if (!r.ok) throw new Error('Band not found');
-        return r.json();
-    })
+    .then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); }))
     .then(data => {
         showToast('📡 Switched to ' + data.band + ' (' + (data.freq / 1000000).toFixed(6) + ' MHz)', true);
         loadTrxState();
     })
-    .catch(() => showToast('❌ Failed to switch band', false));
+    .catch(e => showToast('❌ ' + (e.message || 'Failed to switch band'), false));
 }
 
 // Populate the TRX serial port/config selects from shared response data.

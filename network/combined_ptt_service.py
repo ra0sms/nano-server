@@ -408,6 +408,13 @@ def client_monitor():
         else:
             gpio.set_value(LINE_CON, 0)
             set_ptt(0)  # 🔒 FAIL-SAFE: disable PTT when client is gone
+            # ...and the CW key line too: with break-in (QSK/semi-QSK) the
+            # radio transmits on the key alone, so dropping only PTT would let
+            # a running CW buffer or tune-mode key-down keep it on the air.
+            if cw_sending or cw_buffer:
+                print("[CW] 🔒 Client gone — stopping CW")
+                cw_clear_buffer()
+            cw_set(0)
 
         # Let the web panel know whether a client is actually connected.
         broadcast_client_status(1 if online else 0)
@@ -593,7 +600,11 @@ def send_char(char: str):
 
     deadline = time.monotonic()
     for i in range(length):
-        if shutdown_flag.is_set():
+        # Also checked per element, not just per character: after
+        # cw_stop_sending() keys up, finishing the current character would key
+        # the transmitter again (a long character lasts over a second at low WPM).
+        if shutdown_flag.is_set() or not cw_sending:
+            cw_set(0)
             return False
 
         bit = (bits >> (length - 1 - i)) & 1
