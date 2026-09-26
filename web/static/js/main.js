@@ -1,7 +1,8 @@
 let relayNames = Array(16).fill().map((_, i) => 'Relay ' + (i+1));
 let relayState = Array(16).fill(0);
 let relayMode = ['toggle', 'toggle'];
-let pttActive = false;
+let pttActive = false;   // true whenever relay switching is locked
+let pttSource = null;    // why: 'gpio' | 'cat' | 'unknown'
 
 function showToast(msg, isOk = true) {
     const toast = document.getElementById('toast');
@@ -31,8 +32,16 @@ document.querySelectorAll('.tab').forEach(tab => {
 function updatePttIndicator() {
     const el = document.getElementById('sb-ptt');
     if (!el) return;
-    el.textContent = pttActive ? '● PTT: ON' : '● PTT: OFF';
-    el.className = pttActive ? 'sb-chip sb-ptt-on' : 'sb-chip sb-ptt-off';
+    const labels = {gpio: '● PTT: ON', cat: '● PTT: ON (CAT)', unknown: '● PTT: NO STATUS'};
+    el.textContent = pttActive ? (labels[pttSource] || '● PTT: ON') : '● PTT: OFF';
+    el.className = !pttActive ? 'sb-chip sb-ptt-off'
+        : pttSource === 'unknown' ? 'sb-chip sb-ptt-unknown' : 'sb-chip sb-ptt-on';
+}
+
+function pttLockMessage() {
+    return pttSource === 'unknown'
+        ? '🔒 No PTT status from ptt_server — relay switching blocked'
+        : '🔒 PTT active — relay switching blocked';
 }
 
 // Relay functions
@@ -50,7 +59,7 @@ function renderRelays() {
         if (pttActive) {
             btn.style.opacity = '0.5';
             btn.style.cursor = 'not-allowed';
-            btn.title = '🔒 PTT active — relay switching blocked';
+            btn.title = pttLockMessage();
         }
         if (i < 8) container1.appendChild(btn);
         else container2.appendChild(btn);
@@ -96,6 +105,7 @@ function checkPttStatus() {
         .then(r => r.json())
         .then(data => {
             pttActive = data.active;
+            pttSource = data.source || null;
             updatePttIndicator();
         })
         .catch(() => {});
@@ -103,7 +113,7 @@ function checkPttStatus() {
 
 function toggleRelay(idx) {
     if (pttActive) {
-        showToast('🔒 PTT active — relay switching blocked', false);
+        showToast(pttLockMessage(), false);
         return;
     }
     fetch(`/toggle/${idx}`)
@@ -908,6 +918,7 @@ function saveBandRules() {
 // so updates arrive immediately and the device is polled far less often.
 function applyServerStatus(d) {
     pttActive = !!d.ptt_active;
+    pttSource = d.ptt_source || null;
     updatePttIndicator();
 
     relayState = d.relay_state;

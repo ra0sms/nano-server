@@ -190,6 +190,14 @@ Auto-switching can be toggled on/off via a checkbox in the TRX tab.
 
 This makes it possible to dedicate one relay group to automatic antenna/band switching while keeping the other group for manually-controlled devices.
 
+**Switching only on a band change, with confirmation:** relays are switched only when the frequency moves into a range with a *different* relay set, and only after two frequency readings at least 0.3 s apart agree. This means:
+
+- a single corrupted CAT frame can't flip the antenna;
+- tuning back and forth across a range boundary doesn't chatter the relays;
+- a relay toggled by hand inside an auto-managed group stays as set until the next band change (it is no longer reset on every CAT reading).
+
+While a band change waits for its confirming reading, the server polls the transceiver right away (subject to the external-program collision guard), so the switch still happens promptly. Saving the rules or re-enabling auto-switching re-applies them on the next reading.
+
 ![WEB1](pics/nano-server-web-1.png)
 
 ![WEB2](pics/nano-server-web-2.png)
@@ -207,10 +215,14 @@ This makes it possible to dedicate one relay group to automatic antenna/band swi
 When PTT is active (transmitting), all relay switching is automatically blocked to prevent accidental antenna switching during transmission. This protects both the transceiver and the antenna system.
 
 **How it works:**
-1. [`combined_ptt_service.py`](network/combined_ptt_service.py) broadcasts PTT status via UDP on `127.0.0.1:5004` every time PTT state changes
-2. [`web/app.py`](web/app.py) listens for these broadcasts in a background thread and sets a `ptt_active` flag
-3. Both manual relay toggle and automatic band relay switching check this flag before making changes
-4. The web interface visually disables relay buttons (dimmed, `not-allowed` cursor) while PTT is active
+1. [`combined_ptt_service.py`](network/combined_ptt_service.py) broadcasts the GPIO PTT status via UDP on `127.0.0.1:5004` on every change **and as a heartbeat every ~0.3 s**
+2. [`web/app.py`](web/app.py) listens for these broadcasts in a background thread. If no status has arrived for 1.5 s (the web panel just restarted, or `ptt_server` is stopped/crashed), the PTT state is treated as **unknown and relays stay locked**
+3. **CAT PTT** is tracked too, since programs like JTDX/WSJT-X/flrig often key the radio over CAT instead of the GPIO line:
+   - TX/RX commands external programs send through the TCP port or UART1 relay (Kenwood `TX…;` / `RX…;`, Icom CI-V `1C 00 01` / `1C 00 00`)
+   - the radio's own reports: TX/RX flag in the Kenwood `IF` reply and `TX…;`/`RX…;` auto-information, the Icom reply to `1C 00` (the server polls it on alternate poll cycles)
+   - if the transceiver stops answering CAT for 5 s, the CAT TX state is cleared
+4. Both manual relay toggle and automatic band relay switching are blocked while GPIO PTT is on, CAT PTT is on, or the PTT state is unknown
+5. The web interface visually disables relay buttons (dimmed, `not-allowed` cursor). The status bar shows `PTT: ON`, `PTT: ON (CAT)`, or an orange `PTT: NO STATUS` when `ptt_server` isn't reporting
 
 **Blocked operations:**
 - Manual relay toggle via web UI buttons
@@ -252,14 +264,14 @@ When the UART1 transparent relay is enabled, the CAT bus can be owned by an exte
 However, the server now **automatically resumes its own polling whenever the external program is silent or absent**:
 
 - **Relay ON + external program active** → the server's poller stays quiet; the PC program reads the transceiver directly, and the web **TRX tab** stays updated passively by decoding the responses that flow through the bridge.
-- **Relay ON + external program silent/absent** → after ~5 s without any frame from the external controller (via UART1 or a TCP client), the server takes over the port and polls the transceiver itself, so the web **TRX tab** still shows the live frequency/mode even when no PC program is running. As soon as the external program sends traffic again, the poller hands the port back within one poll cycle.
+- **Relay ON + external program silent/absent** → the server only skips its own poll while an external controller (via UART1 or a TCP client) has sent something within the last 0.3 s, or while the radio has answered within the last 2 s (someone is already keeping the frequency fresh). Otherwise it polls the transceiver itself, so the web **TRX tab** still shows the live frequency/mode even when no PC program is running. As soon as the external program sends traffic again, the poller hands the port back within one poll cycle.
 - **Relay OFF** → internal poller enabled; the web interface queries the transceiver itself and updates the TRX tab even when no PC program is connected.
 
 This behavior applies to **both** CAT protocols (Icom CI-V and Kenwood).
 
 **Stability & auto-recovery:**
 
-All writes to the CAT port are serialized through a single thread lock (`ser_lock`), so the two relay threads (`uart1_reader` and `tcp_client`) and the poller can never interleave their bytes mid-frame and desynchronize the transceiver. Additionally, if the CAT serial port raises a read error (e.g. a temporary USB hiccup or the transceiver is powered off), the server now **automatically closes and reopens the serial ports** with retries instead of silently stalling — so a remote `JTDX`, `flrig`, or `WSJT-X` session no longer needs a full service restart to recover. Manually re-initializing from the web UI (Reconnect button / `POST /trx/reinit`) and re-initializing after a config change are also guarded by the same lock.
+All writes to the CAT port are serialized through a single thread lock (`ser_lock`), and data from each external source (every TCP client and UART1) is first split into **whole CAT frames** (terminated by `;` for Kenwood, `0xFD` for CI-V) — only complete frames are written. So a command that arrives in pieces (e.g. `F` in one TCP segment and `A;` in the next) can never have the poller's or another client's frame inserted into its middle. An unterminated tail is passed through as-is after 0.5 s. The CAT port and UART1 are read without a fixed 100 ms wait, so replies reach JTDX/flrig and UART1 immediately. Additionally, if the CAT serial port raises a read error (e.g. a temporary USB hiccup or the transceiver is powered off), the server now **automatically closes and reopens the serial ports** with retries instead of silently stalling — so a remote `JTDX`, `flrig`, or `WSJT-X` session no longer needs a full service restart to recover. Manually re-initializing from the web UI (Reconnect button / `POST /trx/reinit`) and re-initializing after a config change are also guarded by the same lock.
 
 **Prerequisite:** UART1 overlay must be enabled in `/boot/armbianEnv.txt`:
 ```

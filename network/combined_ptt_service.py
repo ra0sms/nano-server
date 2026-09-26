@@ -78,7 +78,7 @@ PTT_KEEPALIVE_CHECK_INTERVAL = 0.1  # 100 ms — check loop granularity
 TUNE_MAX_HOLD_SECONDS = 60
 
 # === PTT Status Broadcast (to web panel) ===
-PTT_STATUS_PORT = 5004  # UDP port for broadcasting PTT status to web panel on localhost
+PTT_STATUS_PORT = 5004  # UDP port for broadcasting PTT status to web panel on localhost (on change + every CHECK_INTERVAL)
 
 # === Client app presence detection ===
 # The client application is considered "connected" while it keeps sending packets
@@ -99,7 +99,6 @@ MAX_BUFFER = 255
 ptt_state = 0
 client_ip = "0.0.0.0"
 client_last_seen = 0.0       # monotonic timestamp of last packet from the client app
-need_ser2net_reboot = False
 shutdown_flag = threading.Event()
 
 # PTT keepalive tracking
@@ -387,7 +386,6 @@ def client_monitor():
     pings even after the user pressed "Disconnect", which would leave the CON LED
     lit and the web panel showing a bogus RTT.
     """
-    global need_ser2net_reboot
     prev_online = None
 
     while not shutdown_flag.is_set():
@@ -407,17 +405,16 @@ def client_monitor():
 
         if online:
             gpio.set_value(LINE_CON, 1)
-            if need_ser2net_reboot:
-                print("🔄 Client back online — restarting ser2net...")
-                os.system("systemctl restart ser2net.service")
-                need_ser2net_reboot = False
         else:
             gpio.set_value(LINE_CON, 0)
             set_ptt(0)  # 🔒 FAIL-SAFE: disable PTT when client is gone
-            need_ser2net_reboot = True
 
         # Let the web panel know whether a client is actually connected.
         broadcast_client_status(1 if online else 0)
+        # PTT state heartbeat: the web panel keeps relays locked while it has no
+        # fresh PTT status (e.g. it restarted mid-transmission, or this service
+        # is down), so the state is re-sent every cycle, not only on change.
+        broadcast_ptt_status(ptt_state)
 
         if online != prev_online:
             status = "✅ online" if online else "❌ offline"

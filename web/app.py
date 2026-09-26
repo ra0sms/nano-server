@@ -174,9 +174,10 @@ def set_relay(n, on):
 
 
 def toggle_relay(n):
-    global state1, state2, ptt_active
-    if ptt_active:
-        print("🔒 PTT active — relay toggle blocked")
+    global state1, state2
+    reason = ptt_lock_reason()
+    if reason:
+        print(f"🔒 PTT {reason} — relay toggle blocked")
         return
 
     bits = get_state()
@@ -326,14 +327,18 @@ def set_relays_for_frequency(freq_hz):
     re-selected (auto-managed). Relays in any other group keep their current
     state, so e.g. if auto-switching only uses relays 1-8, then relays 9-16 are
     never touched automatically and can be selected manually.
-    """
-    global state1, state2, ptt_active
-    if not band_relay_enabled:
-        return []
 
-    if ptt_active:
-        print("🔒 PTT active — band relay switching blocked")
-        return []
+    Returns the list of relays switched on, or None if switching is disabled
+    or blocked by PTT (nothing was changed).
+    """
+    global state1, state2
+    if not band_relay_enabled:
+        return None
+
+    reason = ptt_lock_reason()
+    if reason:
+        print(f"🔒 PTT {reason} — band relay switching blocked")
+        return None
 
     target = apply_band_rules(freq_hz)
     managed = _managed_relay_groups()
@@ -350,6 +355,47 @@ def set_relays_for_frequency(freq_hz):
 
     apply()
     return target
+
+
+# Automatic switching only acts when the frequency moves into a range with a
+# DIFFERENT relay set, and only once two readings at least
+# BAND_RELAY_CONFIRM_SECONDS apart agree. So a single corrupted CAT frame
+# can't flip the antenna, tuning across a range boundary doesn't chatter the
+# relays, and a relay toggled by hand inside an auto-managed group stays as set
+# until the next band change instead of being reset on every CAT reading.
+BAND_RELAY_CONFIRM_SECONDS = 0.3
+band_relay_applied = None  # tuple of relays last applied automatically; None = apply on next reading
+band_relay_pending = None  # (target tuple, time.monotonic() first seen) awaiting confirmation
+
+
+def reset_band_relay_tracking():
+    """Forget the last applied relay set, so the next frequency reading
+    re-applies the rules (after rules are edited or auto-switching is
+    re-enabled)."""
+    global band_relay_applied, band_relay_pending
+    band_relay_applied = None
+    band_relay_pending = None
+
+
+def track_band_relays(freq_hz):
+    """Called for every frequency the transceiver reports."""
+    global band_relay_applied, band_relay_pending
+    if not band_relay_enabled:
+        return
+    target = tuple(apply_band_rules(freq_hz))
+    if target == band_relay_applied:
+        band_relay_pending = None
+        return
+    now = time.monotonic()
+    if band_relay_pending is None or band_relay_pending[0] != target:
+        band_relay_pending = (target, now)
+        return
+    if now - band_relay_pending[1] < BAND_RELAY_CONFIRM_SECONDS:
+        return
+    # Blocked by PTT -> stays pending and is applied on a reading after TX ends.
+    if set_relays_for_frequency(freq_hz) is not None:
+        band_relay_applied = target
+        band_relay_pending = None
 
 
 # ================= AUDIO & NETWORK CONFIG =================
@@ -369,9 +415,41 @@ TIMEOUT = 1.0
 CHECK_INTERVAL = 0.3
 MAGIC_PHRASE = b"PING_RESPONSE"
 
-# PTT status from combined_ptt_service (via UDP broadcast on port 5004)
+# PTT status from combined_ptt_service (via UDP broadcast on port 5004). The
+# service re-sends its current state every ~0.3 s as a heartbeat, so a missing
+# heartbeat means the GPIO PTT state is unknown (service stopped/crashed, or
+# this web panel just restarted) and relays must stay locked until it's known.
 PTT_STATUS_PORT = 5004
+PTT_STATUS_STALE_SECONDS = 1.5
 ptt_active = False
+ptt_status_time = 0.0  # time.monotonic() of the last PTT status packet
+
+# Transmit state seen on the CAT line: TX/RX commands external programs (JTDX,
+# WSJT-X, flrig) send through the relay, and the radio's own TX/RX reports.
+# CAT PTT bypasses the GPIO PTT line entirely, so without this the relay lock
+# would not know the radio is transmitting.
+cat_tx_active = False
+
+
+def ptt_lock_reason():
+    """Why relay switching is blocked right now: 'gpio' (GPIO PTT on), 'cat'
+    (radio transmitting via CAT), 'unknown' (no fresh PTT status from
+    combined_ptt_service), or None when relays may be switched."""
+    stale = time.monotonic() - ptt_status_time > PTT_STATUS_STALE_SECONDS
+    if ptt_active and not stale:
+        return "gpio"
+    if cat_tx_active:
+        return "cat"
+    if stale:
+        return "unknown"
+    return None
+
+
+def _set_cat_tx(active):
+    global cat_tx_active
+    if active != cat_tx_active:
+        cat_tx_active = active
+        print(f"[TRX] CAT PTT {'ON' if active else 'OFF'}")
 
 # Client-app presence from combined_ptt_service (via UDP broadcast on port 5005).
 # True only while the client software is actually sending control traffic — NOT
@@ -579,7 +657,7 @@ def update_status():
 
 def ptt_status_listener():
     """Listen for PTT status broadcasts from combined_ptt_service on UDP port 5004."""
-    global ptt_active
+    global ptt_active, ptt_status_time
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("127.0.0.1", PTT_STATUS_PORT))
     sock.settimeout(0.5)
@@ -588,6 +666,7 @@ def ptt_status_listener():
         try:
             data, _ = sock.recvfrom(1024)
             ptt_active = (data[0] == 1)
+            ptt_status_time = time.monotonic()
         except socket.timeout:
             continue
         except Exception:
@@ -790,6 +869,13 @@ def decode_bcd_freq(data):
     return freq
 
 
+def _on_radio_freq(freq_hz):
+    """Record a frequency reported by the transceiver and feed band relays."""
+    radio_state["freq"] = freq_hz
+    radio_state["band"] = freq_to_band(freq_hz)
+    track_band_relays(freq_hz)
+
+
 class CIVDecoder:
     def __init__(self):
         self.buffer = bytearray()
@@ -814,6 +900,14 @@ class CIVDecoder:
         if len(frame) < 6:
             return
 
+        # Frame layout: FE FE <to> <from> <cmd> ... FD. Only frames sent BY the
+        # transceiver count. On a single-wire CI-V bus (CT-17, CI-V jack
+        # interfaces, Xiegu G90) every command we or an external program send
+        # is echoed back; without this check the echo of our own poll
+        # (FE FE 70 E0 03 FD) would mark a powered-off radio as online.
+        if frame[3] != trx_config.get("radio_addr", default_trx_config["radio_addr"]):
+            return
+
         radio_state["last_rx"] = time.time()
         radio_state["online"] = True
 
@@ -824,9 +918,11 @@ class CIVDecoder:
             if len(payload) == 5:
                 freq = decode_bcd_freq(payload)
                 if freq:
-                    radio_state["freq"] = freq
-                    radio_state["band"] = freq_to_band(freq)
-                    set_relays_for_frequency(freq)
+                    _on_radio_freq(freq)
+
+        elif cmd == 0x1C and len(frame) == 8 and frame[5] == 0x00:
+            # TX/RX state (reply to our 1C 00 read): 01 = transmitting.
+            _set_cat_tx(frame[6] == 0x01)
 
         elif cmd == 0x04 and len(frame) >= 7:
             mode_byte = frame[5]
@@ -899,9 +995,7 @@ class KenwoodDecoder:
             try:
                 freq_hz = int(text[2:13])
                 if 100000 <= freq_hz <= 3000000000:
-                    radio_state["freq"] = freq_hz
-                    radio_state["band"] = freq_to_band(freq_hz)
-                    set_relays_for_frequency(freq_hz)
+                    _on_radio_freq(freq_hz)
             except ValueError:
                 pass
 
@@ -913,19 +1007,27 @@ class KenwoodDecoder:
         # Combined status: IF<freq:11><space:5><RIT/XIT freq:5><RIT:1><XIT:1>
         # <ch bank:1><ch num:2><TX/RX:1><mode:1>... (Kenwood PC control command
         # reference, "IF" command) — the mode digit is P9, at offset 29, not 18
-        # (18 is the sign character of the RIT/XIT offset field).
+        # (18 is the sign character of the RIT/XIT offset field). The TX/RX
+        # flag is P8, at offset 28 ('1' = transmitting).
         elif text.startswith("IF") and len(text) >= 13:
             try:
                 freq_hz = int(text[2:13])
                 if 100000 <= freq_hz <= 3000000000:
-                    radio_state["freq"] = freq_hz
-                    radio_state["band"] = freq_to_band(freq_hz)
-                    set_relays_for_frequency(freq_hz)
+                    _on_radio_freq(freq_hz)
             except ValueError:
                 pass
+            if len(text) >= 29:
+                _set_cat_tx(text[28] == "1")
             if len(text) >= 30:
                 mode_digit = text[29]
                 radio_state["mode"] = KENWOOD_MODE_MAP.get(mode_digit, "Unknown")
+
+        # Auto-information reports sent by the radio itself on TX/RX changes
+        # (TX0;/TX1;/TX2; while transmitting, RX; / RX0; on return to receive).
+        elif text.startswith("TX"):
+            _set_cat_tx(True)
+        elif text.startswith("RX"):
+            _set_cat_tx(False)
 
 
 def load_trx_config():
@@ -992,6 +1094,89 @@ def init_serial():
         return False
 
 
+# Bytes from an external controller (a TCP client or UART1) arrive in
+# arbitrary chunks: a TCP segment or whatever the UART read returned may end in
+# the middle of a CAT command. Writing such chunks to the radio as they come
+# lets another source's frame (our poller, the web UI, a second client) land in
+# the middle — e.g. "F" + "IF;" + "A;". So every source's stream is split into
+# whole frames first and only whole frames are written under ser_lock.
+CAT_MAX_FRAME = 256          # longest plausible frame; longer runs are passed through as-is
+CAT_PARTIAL_TIMEOUT = 0.5    # an unterminated tail older than this is passed through as-is
+
+
+class CatFrameAssembler:
+    """Splits one source's byte stream into complete CAT frames, terminated by
+    ';' (Kenwood) or 0xFD (Icom CI-V)."""
+
+    def __init__(self):
+        self.buffer = bytearray()
+        self.since = 0.0  # time.monotonic() when the current unterminated tail started
+
+    def feed(self, data):
+        """Add received bytes; return the list of complete frames."""
+        if not self.buffer:
+            self.since = time.monotonic()
+        self.buffer.extend(data)
+        terminator = 0x3B if _is_kenwood() else 0xFD
+        frames = []
+        while True:
+            end = self.buffer.find(terminator)
+            if end < 0:
+                break
+            frames.append(bytes(self.buffer[: end + 1]))
+            del self.buffer[: end + 1]
+            self.since = time.monotonic()
+        if len(self.buffer) > CAT_MAX_FRAME:
+            frames.append(bytes(self.buffer))
+            self.buffer.clear()
+        return frames
+
+    def take_stale(self, force=False):
+        """Return (and drop) an unterminated tail once it's older than
+        CAT_PARTIAL_TIMEOUT (or immediately if force), else None. It is still
+        forwarded rather than discarded, to stay transparent for whatever the
+        external program is doing."""
+        if self.buffer and (force or time.monotonic() - self.since > CAT_PARTIAL_TIMEOUT):
+            data = bytes(self.buffer)
+            self.buffer.clear()
+            return data
+        return None
+
+
+def _note_outgoing_cat_frame(frame):
+    """Track PTT commands an external program sends to the radio over CAT
+    (e.g. JTDX/WSJT-X with "PTT method: CAT"), so relays are locked from the
+    moment it keys the transmitter."""
+    if _is_kenwood():
+        text = frame.decode("ascii", errors="replace").strip()
+        if text.startswith("TX"):
+            _set_cat_tx(True)
+        elif text.startswith("RX"):
+            _set_cat_tx(False)
+    else:
+        # FE FE <radio> <controller> 1C 00 <01=TX / 00=RX> FD
+        start = frame.rfind(b"\xfe\xfe")
+        f = frame[start:] if start >= 0 else b""
+        if (
+            len(f) == 8
+            and f[2] == trx_config.get("radio_addr")
+            and f[4] == 0x1C
+            and f[5] == 0x00
+        ):
+            _set_cat_tx(f[6] == 0x01)
+
+
+def _write_external_frames(frames):
+    """Write whole frames from an external controller to the CAT port."""
+    if not frames:
+        return
+    for f in frames:
+        _note_outgoing_cat_frame(f)
+    with ser_lock:
+        if ser and ser.is_open:
+            ser.write(b"".join(frames))
+
+
 def serial_reader(loop_ref):
     """Read data from the CAT port: decode for the web UI, broadcast to TCP
     clients, and relay to UART1. On a serial error the port is automatically
@@ -1001,7 +1186,11 @@ def serial_reader(loop_ref):
     while True:
         if ser and ser.is_open:
             try:
-                data = ser.read(1024)
+                # Read whatever is already buffered, or block (up to the 0.1 s
+                # port timeout) for the first byte. A fixed read(1024) would wait
+                # the full timeout on every short CAT reply, delaying each one by
+                # up to 100 ms on its way to JTDX/flrig and UART1.
+                data = ser.read(ser.in_waiting or 1)
                 if data:
                     # Decode for web UI
                     if decoder:
@@ -1038,17 +1227,20 @@ def serial_reader(loop_ref):
 def uart1_reader():
     """Read data from UART1 and write to the CAT serial port (transparent relay)."""
     global ser, ser_uart1, external_cat_time
+    assembler = CatFrameAssembler()
     while True:
         if ser_uart1 and ser_uart1.is_open and ser and ser.is_open:
             try:
-                data = ser_uart1.read(1024)
+                data = ser_uart1.read(ser_uart1.in_waiting or 1)
                 if data:
-                    # This frame came FROM the external program (through UART1)
-                    # and is headed TO the radio: remember that the external
+                    # These bytes came FROM the external program (through UART1)
+                    # and are headed TO the radio: remember that the external
                     # program is actively using the CAT port.
                     external_cat_time = time.time()
-                    with ser_lock:
-                        ser.write(data)
+                    _write_external_frames(assembler.feed(data))
+                stale = assembler.take_stale()
+                if stale:
+                    _write_external_frames([stale])
             except Exception as e:
                 print(f"[TRX] UART1 read error: {e}")
                 time.sleep(1)
@@ -1058,7 +1250,8 @@ def uart1_reader():
 
 async def broadcast(data):
     dead = []
-    for w in clients:
+    # Iterate over a copy: clients may connect/disconnect while we await drain().
+    for w in list(clients):
         try:
             w.write(data)
             await w.drain()
@@ -1072,17 +1265,27 @@ async def tcp_client(reader, writer):
     global external_cat_time
     addr = writer.get_extra_info("peername")
     clients.add(writer)
+    assembler = CatFrameAssembler()
     try:
         while True:
-            data = await reader.read(1024)
+            try:
+                # While a command is half-received, wait only CAT_PARTIAL_TIMEOUT
+                # for the rest before passing the tail through as-is.
+                data = await asyncio.wait_for(
+                    reader.read(1024),
+                    timeout=CAT_PARTIAL_TIMEOUT if assembler.buffer else None,
+                )
+            except asyncio.TimeoutError:
+                stale = assembler.take_stale(force=True)
+                if stale:
+                    _write_external_frames([stale])
+                continue
             if not data:
                 break
-            if ser and ser.is_open:
-                # A TCP client acts like an external controller: mark the CAT
-                # port as busy so the poller backs off while it's active.
-                external_cat_time = time.time()
-                with ser_lock:
-                    ser.write(data)
+            # A TCP client acts like an external controller: mark the CAT
+            # port as busy so the poller backs off while it's active.
+            external_cat_time = time.time()
+            _write_external_frames(assembler.feed(data))
     except:
         pass
     clients.discard(writer)
@@ -1091,6 +1294,7 @@ async def tcp_client(reader, writer):
 
 
 async def poller():
+    poll_cycle = 0
     while True:
         # Run frequently: the faster we sweep stale bytes, the sooner a
         # restarted JTDX session re-syncs. 0.5s is short enough to clear a
@@ -1108,6 +1312,9 @@ async def poller():
         # (which updates radio_state["last_rx"]) does.
         if time.time() - radio_state["last_rx"] > 5:
             radio_state["online"] = False
+            # A radio that doesn't answer (typically powered off) can't report
+            # RX again, so don't keep the relays locked on a stale CAT TX.
+            _set_cat_tx(False)
 
         # Transparent-relay ownership check. When the UART1 relay (and/or a TCP
         # client) is enabled, an external program on the PC is meant to own the
@@ -1122,12 +1329,11 @@ async def poller():
         # can still show the live frequency/mode. As soon as external traffic
         # resumes, this check backs off and hands the port back to the external
         # program within one poll cycle.
-        # 1) Frame-collision guard: if an external program wrote a frame within
-        #    the last ~EXTERNAL_CAT_TIMEOUT, don't inject our own query right now.
-        #    The window is tiny so the server still polls between external bursts.
-        if trx_config.get("uart1_enabled", True) and (
-            time.time() - external_cat_time
-        ) <= EXTERNAL_CAT_TIMEOUT:
+        # 1) Frame-collision guard: if an external program (via UART1 or a TCP
+        #    client) wrote a frame within the last ~EXTERNAL_CAT_TIMEOUT, don't
+        #    inject our own query right now. The window is tiny so the server
+        #    still polls between external bursts.
+        if (time.time() - external_cat_time) <= EXTERNAL_CAT_TIMEOUT:
             continue
 
         # 2) If the radio answered very recently, an external program (flrig/
@@ -1135,18 +1341,26 @@ async def poller():
         #    skip our own poll. Otherwise the server polls the radio itself, so
         #    the web UI always shows the live value — including when an external
         #    connection is connected but idle (e.g. a CAT bridge, no flrig).
-        if (time.time() - radio_state["last_rx"]) <= RADIO_FRESH_TIMEOUT:
+        #    Exception: a band change is waiting for its confirming reading
+        #    (see track_band_relays) — poll now so the antenna switches promptly.
+        if (
+            band_relay_pending is None
+            and (time.time() - radio_state["last_rx"]) <= RADIO_FRESH_TIMEOUT
+        ):
             continue
 
         protocol = trx_config.get("protocol", "Icom")
         if protocol == "Kenwood":
-            # Kenwood CAT: IF; returns frequency + mode of the active VFO (A or B)
+            # Kenwood CAT: IF; returns frequency, mode and TX/RX state of the
+            # active VFO (A or B)
             cmd = b"IF;"
         else:
-            # Icom CI-V: poll frequency
-            cmd = bytes(
-                [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"], 0x03, 0xFD]
-            )
+            # Icom CI-V: poll frequency, plus mode (04) or TX/RX state (1C 00)
+            # on alternate cycles — the frequency reply carries neither.
+            head = [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"]]
+            extra = [0x04] if poll_cycle % 2 == 0 else [0x1C, 0x00]
+            cmd = bytes(head + [0x03, 0xFD] + head + extra + [0xFD])
+            poll_cycle += 1
         try:
             with ser_lock:
                 ser.write(cmd)
@@ -1370,6 +1584,7 @@ def bandrelay_save_rules():
                 return f"Invalid relay index: {r}", 400
     band_rules = data
     save_band_rules()
+    reset_band_relay_tracking()
     return "ok"
 
 
@@ -1378,9 +1593,14 @@ def bandrelay_apply():
     """Manually apply band rules for the current frequency."""
     if not auth():
         return "no auth", 403
+    global band_relay_applied, band_relay_pending
     freq = radio_state.get("freq", 0)
     if freq:
         relays = set_relays_for_frequency(freq)
+        if relays is None:
+            return jsonify({"relays": [], "freq_khz": freq / 1000, "blocked": True})
+        band_relay_applied = tuple(relays)
+        band_relay_pending = None
         return jsonify({"relays": relays, "freq_khz": freq / 1000})
     return jsonify({"relays": [], "freq_khz": 0})
 
@@ -1393,6 +1613,7 @@ def bandrelay_toggle():
     global band_relay_enabled
     data = request.json
     band_relay_enabled = data.get("enabled", True)
+    reset_band_relay_tracking()
     return jsonify({"enabled": band_relay_enabled})
 
 
@@ -1553,6 +1774,15 @@ def _freq_to_civ_bcd(freq_hz):
     return bytes(bcd)
 
 
+def _percent_to_civ_level(percent):
+    """Encode a 0-100% value as the 2-byte BCD level (0000-0255) used by Icom
+    CI-V 'set level' commands (0x14 xx), most-significant digits first —
+    e.g. 50% -> 128 -> b'\\x01\\x28'. Sending the level as a single raw binary
+    byte instead is misread by the radio."""
+    level = max(0, min(255, round(percent * 255 / 100)))
+    return bytes([level // 100, ((level // 10) % 10) << 4 | (level % 10)])
+
+
 def _set_transceiver_freq(freq_hz):
     """Send a 'set frequency' command to the transceiver (in the configured
     protocol) and update radio_state accordingly."""
@@ -1630,11 +1860,11 @@ def trx_set_power():
         # Kenwood: PC command (some models support it)
         _send_kenwood_cmd(f"PC{power:03d};")
     else:
-        # Icom CI-V: power setting command 0x14
-        # Value 0-255 maps to 0-100%
-        pwr_byte = max(0, min(255, int(power * 255 / 100)))
-        cmd = bytes([0x14, pwr_byte])
-        _send_civ_cmd(cmd)
+        # Icom CI-V: RF power level, command 0x14 sub-command 0x0A followed by
+        # the 2-byte BCD level 0000-0255 (0-100%). Without the 0x0A sub-command
+        # the level byte itself would be taken as the sub-command and change
+        # an unrelated setting.
+        _send_civ_cmd(bytes([0x14, 0x0A]) + _percent_to_civ_level(power))
 
     radio_state["power"] = power
     return jsonify({"power": power})
@@ -1657,10 +1887,9 @@ def trx_set_af_gain():
         level_255 = round(gain * 255 / 100)
         _send_kenwood_cmd(f"AG0{level_255:03d};")
     else:
-        # Icom CI-V: AF gain command 0x14 with sub-command 0x01
-        gain_byte = max(0, min(255, int(gain * 255 / 100)))
-        cmd = bytes([0x14, 0x01, gain_byte])
-        _send_civ_cmd(cmd)
+        # Icom CI-V: AF gain, command 0x14 sub-command 0x01 followed by the
+        # 2-byte BCD level 0000-0255 (0-100%).
+        _send_civ_cmd(bytes([0x14, 0x01]) + _percent_to_civ_level(gain))
 
     radio_state["af_gain"] = gain
     return jsonify({"af_gain": gain})
@@ -2050,7 +2279,8 @@ def status_connection():
 @app.route("/ptt/status")
 def ptt_status_api():
     """Return current PTT state (from combined_ptt_service broadcast)."""
-    return jsonify({"active": ptt_active})
+    reason = ptt_lock_reason()
+    return jsonify({"active": reason is not None, "source": reason})
 
 
 # ================= LIVE STATUS (SSE) =================
@@ -2066,9 +2296,13 @@ def _status_snapshot():
 
     freq = radio_state.get("freq", 0)
     bfreq = freq / 1000 if freq else 0
+    ptt_reason = ptt_lock_reason()
 
     return {
-        "ptt_active": ptt_active,
+        # True whenever relay switching is locked; ptt_source says why
+        # ('gpio' / 'cat' / 'unknown').
+        "ptt_active": ptt_reason is not None,
+        "ptt_source": ptt_reason,
         "relay_state": get_state(),
         "names": config.get("names", default_config["names"]),
         "mode": config.get("group_mode", default_config["group_mode"]),
