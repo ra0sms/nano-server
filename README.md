@@ -236,7 +236,7 @@ When PTT is active (transmitting), all relay switching is automatically blocked 
 
 The server can transparently relay all CAT data between the transceiver (connected via the USB-to-Serial CAT port selected in web Settings) and a local computer connected to the **UART1** physical port (`/dev/ttyS1`, pins 8-TX, 10-RX on NanoPi NEO). This allows two clients to share the same CAT connection simultaneously:
 
-- **Remote client** — connects via TCP port 3001 over the network. Only `127.0.0.1`, the client IP from `client_ip.cfg`, and the IPs listed in **Settings → Extra CAT TCP clients** (`tcp_allowed_ips` in `trx_config.json`) may connect; other connections are closed immediately, since this port can key and retune the transmitter
+- **Remote client** — connects via TCP port 3001 over the network. Only `127.0.0.1`, the client IP from `client_ip.cfg`, and the IPs listed in `tcp_allowed_ips` in `web/trx_config.json` (edit the file, then restart `relay-web`; e.g. `"tcp_allowed_ips": ["192.168.1.50"]`) may connect; other connections are closed immediately, since this port can key and retune the transmitter
 - **Local computer** — connected directly via UART1 (e.g., a PC next to the server)
 
 **How it works:**
@@ -274,6 +274,13 @@ However, the server now **automatically resumes its own polling whenever the ext
 - **Relay OFF** → internal poller enabled; the web interface queries the transceiver itself and updates the TRX tab even when no PC program is connected.
 
 This behavior applies to **both** CAT protocols (Icom CI-V and Kenwood).
+
+"Recently" means the radio has reported the **active** frequency in the last 2 s; other CAT traffic doesn't count (e.g. Hamlib reading only the inactive VFO).
+
+**What the web panel decodes:**
+
+- **Icom CI-V:** frequency and mode replies (`03`/`04`) and the radio's own **transceive** reports (`00`/`01`). With *CI-V Transceive* enabled in the radio's menu, frequency changes arrive as soon as the dial moves, so band relays react without waiting for a poll. Modes: LSB, USB, AM, CW, CW-R, RTTY, RTTY-R, FM, WFM, DV, DD. 6-byte frequencies (10 GHz+ bands, IC-905) are supported.
+- **Kenwood:** `IF` (frequency, mode, TX/RX and **active VFO**), `FA`/`FB`, `MD`, `FR`. `FA`/`FB` only update the displayed frequency and band relays when they are for the VFO the radio is operating on (learned from `IF`, `FR` reports and `FR` commands external programs send). Otherwise, working on VFO B would switch antennas by VFO A's frequency. Frequency changes from the web UI are sent to the active VFO (`FB` when on VFO B).
 
 **Stability & auto-recovery:**
 

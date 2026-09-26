@@ -142,9 +142,10 @@ external_cat_time = 0.0
 # bursts and the web frequency stays live even with an idle CAT bridge.
 EXTERNAL_CAT_TIMEOUT = 0.3
 
-# How recently (seconds) the radio must have answered for the server to treat the
-# frequency as "already fresh" (i.e. an external program like flrig is polling
-# through the relay) and skip its own poll. Larger than the poll cadence.
+# How recently (seconds) the radio must have reported the active frequency for
+# the server to treat it as "already fresh" (i.e. an external program like
+# flrig is polling it through the relay, or the radio sends transceive reports)
+# and skip its own poll. Larger than the poll cadence.
 RADIO_FRESH_TIMEOUT = 2.0
 
 # Serialize writes to the CAT port (ser). pyserial write() is NOT thread-safe:
@@ -943,7 +944,9 @@ def freq_to_band(freq):
 
 
 def decode_bcd_freq(data):
-    if len(data) != 5:
+    """Decode a CI-V BCD frequency (least-significant digit pair first).
+    5 bytes cover up to 9.999 GHz; radios with 10 GHz+ bands (IC-905) send 6."""
+    if len(data) not in (5, 6):
         return None
     freq = 0
     for i, b in enumerate(data):
@@ -958,7 +961,30 @@ def _on_radio_freq(freq_hz):
     """Record a frequency reported by the transceiver and feed band relays."""
     radio_state["freq"] = freq_hz
     radio_state["band"] = freq_to_band(freq_hz)
+    # When the displayed (active VFO) frequency was last confirmed by the
+    # radio. The poller uses this, not last_rx: an external program may keep
+    # the radio busy answering other queries (e.g. the other VFO) while the
+    # active frequency goes stale.
+    radio_state["freq_time"] = time.time()
     track_band_relays(freq_hz)
+
+
+# CI-V operating modes (command 04 reply / 01 transceive report, first data
+# byte). Data sub-modes (USB-D etc.) are reported separately (1A 06) and are
+# shown as the base mode.
+ICOM_MODE_MAP = {
+    0x00: "LSB",
+    0x01: "USB",
+    0x02: "AM",
+    0x03: "CW",
+    0x04: "RTTY",
+    0x05: "FM",
+    0x06: "WFM",
+    0x07: "CW-R",
+    0x08: "RTTY-R",
+    0x17: "DV",
+    0x22: "DD",
+}
 
 
 class CIVDecoder:
@@ -968,17 +994,25 @@ class CIVDecoder:
     def feed(self, data):
         self.buffer.extend(data)
         while True:
-            try:
-                start = self.buffer.index(b"\xfe\xfe")
-            except ValueError:
-                self.buffer.clear()
+            start = self.buffer.find(b"\xfe\xfe")
+            if start < 0:
+                # Keep a trailing FE: it may be the first half of the next
+                # frame's preamble, split across two reads.
+                if self.buffer[-1:] == b"\xfe":
+                    del self.buffer[:-1]
+                else:
+                    self.buffer.clear()
                 return
-            try:
-                end = self.buffer.index(0xFD, start)
-            except ValueError:
+            end = self.buffer.find(0xFD, start)
+            if end < 0:
+                del self.buffer[:start]  # drop garbage before the preamble
                 return
             frame = bytes(self.buffer[start : end + 1])
             del self.buffer[: end + 1]
+            # Some interfaces send a longer preamble (FE FE FE ...): drop the
+            # extra FEs so <to>/<from>/<cmd> land at their usual offsets.
+            while len(frame) > 2 and frame[2] == 0xFE:
+                frame = frame[1:]
             self.process_frame(frame)
 
     def process_frame(self, frame):
@@ -998,28 +1032,21 @@ class CIVDecoder:
 
         cmd = frame[4]
 
-        if cmd == 0x03:
-            payload = frame[5:-1]
-            if len(payload) == 5:
-                freq = decode_bcd_freq(payload)
-                if freq:
-                    _on_radio_freq(freq)
+        # 03 = reply to a frequency read; 00 = transceive report the radio
+        # sends by itself (to address 00) whenever the dial moves, with "CI-V
+        # Transceive" on — band relays then react without waiting for a poll.
+        if cmd in (0x00, 0x03):
+            freq = decode_bcd_freq(frame[5:-1])
+            if freq:
+                _on_radio_freq(freq)
 
         elif cmd == 0x1C and len(frame) == 8 and frame[5] == 0x00:
             # TX/RX state (reply to our 1C 00 read): 01 = transmitting.
             _set_cat_tx(frame[6] == 0x01)
 
-        elif cmd == 0x04 and len(frame) >= 7:
-            mode_byte = frame[5]
-            modes = {
-                0x00: "LSB",
-                0x01: "USB",
-                0x02: "AM",
-                0x03: "CW",
-                0x04: "RTTY",
-                0x05: "FM",
-            }
-            radio_state["mode"] = modes.get(mode_byte, "Unknown")
+        # 04 = reply to a mode read; 01 = transceive mode report.
+        elif cmd in (0x01, 0x04) and len(frame) >= 7:
+            radio_state["mode"] = ICOM_MODE_MAP.get(frame[5], "Unknown")
 
 
 
@@ -1034,9 +1061,26 @@ KENWOOD_MODE_MAP = {
     "4": "FM",
     "5": "AM",
     "6": "RTTY",
-    "7": "CW",
-    "9": "RTTY",
+    "7": "CW-R",
+    "9": "RTTY-R",
 }
+
+# Kenwood VFO the radio is receiving on: "A", "B" or "M" (memory channel).
+# FA;/FB; replies carry the frequency of a specific VFO, not the active one, so
+# they only update the displayed frequency (and band relays) when they are for
+# the active VFO. Otherwise, operating on VFO B (or reading both VFOs, as
+# Hamlib does) would switch the antenna by VFO A's frequency. Learned from the
+# IF reply, FR reports and FR commands external programs send; VFO A until
+# known.
+kenwood_rx_vfo = "A"
+_KENWOOD_VFO = {"0": "A", "1": "B", "2": "M"}
+
+
+def _set_kenwood_rx_vfo(code):
+    global kenwood_rx_vfo
+    vfo = _KENWOOD_VFO.get(code)
+    if vfo:
+        kenwood_rx_vfo = vfo
 
 
 class KenwoodDecoder:
@@ -1073,16 +1117,22 @@ class KenwoodDecoder:
             return
         text = text[:-1]  # strip ';'
 
-        # Frequency response: FAxxxxxxxxxxx
+        # Frequency response: FAxxxxxxxxxxx (VFO A) / FBxxxxxxxxxxx (VFO B)
         # Kenwood sends the frequency as an 11-digit, zero-padded Hz value
         # (e.g. 14.074 MHz -> "00014074000"), i.e. text[2:13].
-        if text.startswith("FA") and len(text) >= 13:
+        if text[:2] in ("FA", "FB") and len(text) >= 13:
+            if kenwood_rx_vfo != text[1]:
+                return  # not the VFO the radio is operating on
             try:
                 freq_hz = int(text[2:13])
                 if 100000 <= freq_hz <= 3000000000:
                     _on_radio_freq(freq_hz)
             except ValueError:
                 pass
+
+        # Receive VFO report: FR0 (A) / FR1 (B) / FR2 (memory)
+        elif text.startswith("FR") and len(text) == 3:
+            _set_kenwood_rx_vfo(text[2])
 
         # Mode response: MDx
         elif text.startswith("MD") and len(text) >= 3:
@@ -1093,8 +1143,12 @@ class KenwoodDecoder:
         # <ch bank:1><ch num:2><TX/RX:1><mode:1>... (Kenwood PC control command
         # reference, "IF" command) — the mode digit is P9, at offset 29, not 18
         # (18 is the sign character of the RIT/XIT offset field). The TX/RX
-        # flag is P8, at offset 28 ('1' = transmitting).
+        # flag is P8, at offset 28 ('1' = transmitting); P10 at offset 30 is
+        # the active VFO (0 = A, 1 = B, 2 = memory). The IF frequency is always
+        # the one the radio is operating on.
         elif text.startswith("IF") and len(text) >= 13:
+            if len(text) >= 31:
+                _set_kenwood_rx_vfo(text[30])
             try:
                 freq_hz = int(text[2:13])
                 if 100000 <= freq_hz <= 3000000000:
@@ -1238,6 +1292,8 @@ def _note_outgoing_cat_frame(frame):
             _set_cat_tx(True)
         elif text.startswith("RX"):
             _set_cat_tx(False)
+        elif text.startswith("FR") and len(text) == 4:  # "FR1;" selects RX VFO B
+            _set_kenwood_rx_vfo(text[2])
     else:
         # FE FE <radio> <controller> 1C 00 <01=TX / 00=RX> FD
         start = frame.rfind(b"\xfe\xfe")
@@ -1499,16 +1555,18 @@ async def poller():
         if (time.time() - external_cat_time) <= EXTERNAL_CAT_TIMEOUT:
             continue
 
-        # 2) If the radio answered very recently, an external program (flrig/
-        #    JTDX) is already keeping the frequency fresh through the relay, so
-        #    skip our own poll. Otherwise the server polls the radio itself, so
+        # 2) If the radio reported the active frequency very recently, an
+        #    external program (flrig/JTDX) or transceive reports are already
+        #    keeping it fresh, so skip our own poll. Other traffic doesn't count:
+        #    e.g. Hamlib reading only the inactive VFO keeps the radio busy but
+        #    leaves the displayed frequency stale. Otherwise the server polls the radio itself, so
         #    the web UI always shows the live value — including when an external
         #    connection is connected but idle (e.g. a CAT bridge, no flrig).
         #    Exception: a band change is waiting for its confirming reading
         #    (see track_band_relays) — poll now so the antenna switches promptly.
         if (
             band_relay_pending is None
-            and (time.time() - radio_state["last_rx"]) <= RADIO_FRESH_TIMEOUT
+            and (time.time() - radio_state.get("freq_time", 0)) <= RADIO_FRESH_TIMEOUT
         ):
             continue
 
@@ -1964,7 +2022,9 @@ def _set_transceiver_freq(freq_hz):
     """Send a 'set frequency' command to the transceiver (in the configured
     protocol) and update radio_state accordingly."""
     if _is_kenwood():
-        _send_kenwood_cmd(f"FA{freq_hz:011d};")
+        # Set the VFO the radio is operating on (FA sets VFO A only).
+        vfo_cmd = "FB" if kenwood_rx_vfo == "B" else "FA"
+        _send_kenwood_cmd(f"{vfo_cmd}{freq_hz:011d};")
     else:
         # Icom CI-V: set frequency command 0x05
         _send_civ_cmd(bytes([0x05]) + _freq_to_civ_bcd(freq_hz))

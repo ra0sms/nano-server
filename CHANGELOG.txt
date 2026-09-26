@@ -1,3 +1,15 @@
+## v1.2.3 (2026-09-26)
+- Frequency changes from the web UI (step, band buttons, /trx/set_freq) are refused while PTT is active or its state is unknown: band relays can't follow during TX, so the radio would transmit into the previous band's antenna. Frequency steps are also refused while the transceiver is offline instead of jumping to 7.1 MHz
+- When the client disappears, ptt_server now also stops a running CW message, clears the CW buffer and releases the key line (with break-in the radio would otherwise keep transmitting); a stopped CW message no longer finishes the current character and re-keys the transmitter
+- Band relay rules are validated on the server (numeric from < to in kHz, relays 1-16); an invalid band_rules.json is kept as band_rules.json.invalid instead of being overwritten
+- A CAT decoding error no longer makes the CAT port reopen on every frame: frames are still forwarded to external programs and the error is logged
+- PTT/client status listeners recover from errors instead of exiting (which left every relay locked until the web panel was restarted)
+- Icom CI-V: transceive reports (00/01) are decoded, so band relays follow the dial immediately with "CI-V Transceive" on; added CW-R, RTTY-R, WFM, DV, DD modes and 6-byte (10 GHz+) frequencies; longer or split FE preambles no longer lose a frame
+- Kenwood: the active VFO is tracked (IF, FR), FA/FB only update the frequency and band relays for the VFO in use, and web frequency changes go to the active VFO; MD7/MD9 shown as CW-R/RTTY-R
+- The server polls whenever the active frequency hasn't been reported for 2 s, even if the radio is busy answering other queries
+- Removed the "Extra CAT TCP clients" field from Settings; extra IPs for CAT port 3001 can still be set in `tcp_allowed_ips` in web/trx_config.json
+
+
 ## v1.2.2 (2026-09-26)
 - CAT: data from each external source (every TCP client and UART1) is split into whole frames before it's written to the radio, so the poller's or another client's command can no longer land in the middle of a command that arrived in pieces; the CAT port and UART1 are read without a fixed 100 ms wait, so replies reach JTDX/flrig immediately
 - CAT: replies to the server's own requests are no longer forwarded to external programs — Icom CI-V: the server uses its own controller address (Settings → Server CI-V Address, default 0xE1) and frames to/from it are kept back; Kenwood: the reply to the server's own IF; poll is kept back

@@ -251,7 +251,6 @@ function populateTrxConfig(cfg, ports) {
     document.getElementById('trx-uart1-enabled').checked = cfg.uart1_enabled !== false;
     document.getElementById('trx-radio-addr').value = hexAddr(cfg.radio_addr);
     document.getElementById('trx-server-addr').value = hexAddr(cfg.server_addr ?? 0xE1);
-    document.getElementById('trx-tcp-allowed').value = (cfg.tcp_allowed_ips || []).join(', ');
 }
 
 function hexAddr(n) {
@@ -309,8 +308,6 @@ function saveTrxSettings() {
         showToast('❌ Invalid server CI-V address. Use hex format: 0x00-0xFF', false);
         return;
     }
-    const tcpAllowed = document.getElementById('trx-tcp-allowed').value
-        .split(',').map(s => s.trim()).filter(s => s);
 
     // Validate serial port
     const port = document.getElementById('trx-port').value;
@@ -325,7 +322,6 @@ function saveTrxSettings() {
         protocol: document.getElementById('trx-protocol').value,
         radio_addr: radioAddr,
         server_addr: serverAddr,
-        tcp_allowed_ips: tcpAllowed,
         enabled: document.getElementById('trx-enabled').value === 'true',
         uart1_enabled: document.getElementById('trx-uart1-enabled').checked
     };
