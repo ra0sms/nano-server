@@ -227,7 +227,7 @@ When PTT is active (transmitting), all relay switching is automatically blocked 
 **Blocked operations:**
 - Manual relay toggle via web UI buttons
 - Automatic band relay switching when transceiver frequency changes
-- Direct API calls to `/toggle/<n>` (server-side check)
+- Direct API calls to `POST /toggle/<n>` (server-side check)
 
 ---
 
@@ -235,7 +235,7 @@ When PTT is active (transmitting), all relay switching is automatically blocked 
 
 The server can transparently relay all CAT data between the transceiver (connected via the USB-to-Serial CAT port selected in web Settings) and a local computer connected to the **UART1** physical port (`/dev/ttyS1`, pins 8-TX, 10-RX on NanoPi NEO). This allows two clients to share the same CAT connection simultaneously:
 
-- **Remote client** — connects via TCP port 3001 over the network
+- **Remote client** — connects via TCP port 3001 over the network. Only `127.0.0.1`, the client IP from `client_ip.cfg`, and the IPs listed in **Settings → Extra CAT TCP clients** (`tcp_allowed_ips` in `trx_config.json`) may connect; other connections are closed immediately, since this port can key and retune the transmitter
 - **Local computer** — connected directly via UART1 (e.g., a PC next to the server)
 
 **How it works:**
@@ -253,7 +253,12 @@ The server can transparently relay all CAT data between the transceiver (connect
 }
 ```
 
-The UART1 baudrate is automatically set to match the CAT port baudrate. If UART1 is unavailable (e.g., overlay not enabled), the server logs a warning and continues without it.
+The UART1 baudrate is automatically set to match the CAT port baudrate.
+
+**Replies to the server's own requests are not forwarded.** The server's own polls (and the web UI's TRX commands) would otherwise produce replies that external programs take as answers to their own requests, causing "unexpected reply" errors and retries in Hamlib/JTDX/flrig:
+
+- **Icom CI-V:** the server talks to the radio from its own controller address, **Server CI-V Address** in Settings (`server_addr`, default `0xE1`), not the `0xE0` that flrig/JTDX/Hamlib use (`ctrl_addr`). The radio replies to the sender's address, so frames to or from `server_addr` (including the echo on a single-wire CI-V bus) are decoded for the web UI but not passed to TCP clients or UART1. If some radio only works with `0xE0`, set Server CI-V Address to `0xE0`: everything is then forwarded, as in older versions.
+- **Kenwood:** there are no addresses, so after each `IF;` poll the next `IF…;` reply (within 0.5 s) is kept back from external programs. If UART1 is unavailable (e.g., overlay not enabled), the server logs a warning and continues without it.
 
 **Web UI toggle:** The **Settings → Transceiver Settings** tab now includes a **"UART1 transparent relay"** checkbox. It can be turned on/off directly from the web interface and takes effect immediately (the relay is re-initialized without restarting the service).
 

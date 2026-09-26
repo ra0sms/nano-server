@@ -1,3 +1,20 @@
+## v1.2.2 (2026-09-26)
+- CAT: data from each external source (every TCP client and UART1) is split into whole frames before it's written to the radio, so the poller's or another client's command can no longer land in the middle of a command that arrived in pieces; the CAT port and UART1 are read without a fixed 100 ms wait, so replies reach JTDX/flrig immediately
+- CAT: replies to the server's own requests are no longer forwarded to external programs — Icom CI-V: the server uses its own controller address (Settings → Server CI-V Address, default 0xE1) and frames to/from it are kept back; Kenwood: the reply to the server's own IF; poll is kept back
+- CAT: the server's internal poller now runs when the external program is silent, so the TRX tab stays live with the UART1 relay enabled and no PC program running; for Icom it also polls mode and TX/RX state
+- CAT PTT is detected (TX/RX commands from JTDX/WSJT-X/flrig and the radio's own TX/RX reports) and locks relay switching just like GPIO PTT
+- ptt_server re-sends the PTT state every 0.3 s; relays stay locked while the web panel has no fresh PTT status (status bar shows "PTT: NO STATUS")
+- Band relay switches only when the frequency enters a range with a different relay set and two readings 0.3 s apart agree: no switching on a corrupted frame, no chatter at range boundaries, and relays toggled by hand in an auto-managed group are no longer reset on every CAT reading
+- Fix Icom CI-V RF power (now 14 0A + 2-byte BCD) and AF gain (14 01 + 2-byte BCD) commands
+- Fix a powered-off Icom radio showing ONLINE on single-wire CI-V: echoed frames are ignored, only frames sent by the transceiver count
+- Security: CAT TCP port 3001 only accepts 127.0.0.1, the client IP and IPs listed in Settings → Extra CAT TCP clients; relay toggle and band-relay apply are POST-only; session cookie is SameSite=Lax; /ptt/status and /trx/ports require login
+- Client presence (CON LED, web RTT) is based on the client app's own traffic and heartbeat, not on whether the client machine answers pings, so pressing Disconnect in the client is reflected immediately
+- CW keyer: deadline-based compensated timing, so dits, dahs and gaps no longer stretch from sleep overshoot
+- ptt_server works with both libgpiod v1 and v2 Python bindings
+- Removed the leftover ser2net restart from ptt_server
+- Updated PCB layout and gerbers
+
+
 ## v1.2.1 (2026-09-09)
 - Group-scoped automatic relay switching: if the band rules only use relays 1-8 (or only 9-16), the other group is left untouched, so those relays can still be selected manually and their state survives every frequency change
 - Live web UI updates via Server-Sent Events (`/events`) replace the per-tab 2 s HTTP polling; a persistent status bar (PTT / TRX / client RTT) is now shown on every tab

@@ -46,6 +46,10 @@ else:
     except Exception:
         pass
 
+# Don't send the session cookie with cross-site requests, so a page on another
+# site can't drive the panel (toggle relays etc.) through the user's login.
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
 # Password
 _PASSWORD_FILE = Path(__file__).with_name("password.txt")
 PASSWORD = _PASSWORD_FILE.read_text().strip() if _PASSWORD_FILE.exists() else "1234"
@@ -72,6 +76,11 @@ except Exception as _e:
 state1 = 0xFF
 state2 = 0xFF
 
+# Guards state1/state2 (and the band-relay tracking below): they are changed
+# from Flask request threads (manual toggle) and from the CAT serial thread
+# (automatic band switching). Reentrant, since toggling = toggle_relay + apply.
+relay_lock = threading.RLock()
+
 # ================= TRANSFER CONFIG =================
 TRX_CONFIG_FILE = Path(__file__).with_name("trx_config.json")
 
@@ -82,8 +91,20 @@ default_trx_config = {
     "baudrate": 19200,
     "protocol": "Icom",
     "radio_addr": 0x70,
+    # CI-V controller address used by the external programs (flrig, JTDX,
+    # Hamlib — 0xE0 is their near-universal default).
     "ctrl_addr": 0xE0,
+    # CI-V controller address the server itself uses for its own polls and web
+    # UI commands. It differs from ctrl_addr on purpose: the radio replies to
+    # the sender's address, so replies meant for the server can be told apart
+    # and are NOT forwarded to external programs, which would otherwise take
+    # them as answers to their own requests. Set it equal to ctrl_addr to get
+    # the old behavior (everything forwarded).
+    "server_addr": 0xE1,
     "tcp_port": 3001,
+    # Extra IPs allowed to connect to the CAT TCP port, besides 127.0.0.1 and
+    # the client IP from client_ip.cfg.
+    "tcp_allowed_ips": [],
     "enabled": True,
     "uart1_enabled": True,
     "uart1_port": "/dev/ttyS1",
@@ -143,18 +164,21 @@ def apply():
     if bus is None:
         return
     try:
-        bus.write_byte(ADDR1, state1)
-        bus.write_byte(ADDR2, state2)
+        with relay_lock:
+            bus.write_byte(ADDR1, state1)
+            bus.write_byte(ADDR2, state2)
     except Exception as e:
         print(f"[relay] I2C write failed: {e} (relay board disconnected?)")
 
 
 def get_state():
+    with relay_lock:
+        s1, s2 = state1, state2
     bits = []
     for i in range(8):
-        bits.append(1 if (state1 & (1 << i)) == 0 else 0)
+        bits.append(1 if (s1 & (1 << i)) == 0 else 0)
     for i in range(8):
-        bits.append(1 if (state2 & (1 << i)) == 0 else 0)
+        bits.append(1 if (s2 & (1 << i)) == 0 else 0)
     return bits
 
 
@@ -343,17 +367,18 @@ def set_relays_for_frequency(freq_hz):
     target = apply_band_rules(freq_hz)
     managed = _managed_relay_groups()
 
-    # Only reset the groups that are auto-managed by the band rules. The other
-    # group byte is left as-is so a manually-selected relay there is preserved.
-    if 0 in managed:
-        state1 = 0xFF
-    if 1 in managed:
-        state2 = 0xFF
+    with relay_lock:
+        # Only reset the groups that are auto-managed by the band rules. The other
+        # group byte is left as-is so a manually-selected relay there is preserved.
+        if 0 in managed:
+            state1 = 0xFF
+        if 1 in managed:
+            state2 = 0xFF
 
-    for r in target:
-        set_relay(r, True)
+        for r in target:
+            set_relay(r, True)
 
-    apply()
+        apply()
     return target
 
 
@@ -373,12 +398,18 @@ def reset_band_relay_tracking():
     re-applies the rules (after rules are edited or auto-switching is
     re-enabled)."""
     global band_relay_applied, band_relay_pending
-    band_relay_applied = None
-    band_relay_pending = None
+    with relay_lock:
+        band_relay_applied = None
+        band_relay_pending = None
 
 
 def track_band_relays(freq_hz):
     """Called for every frequency the transceiver reports."""
+    with relay_lock:
+        _track_band_relays(freq_hz)
+
+
+def _track_band_relays(freq_hz):
     global band_relay_applied, band_relay_pending
     if not band_relay_enabled:
         return
@@ -1177,12 +1208,64 @@ def _write_external_frames(frames):
             ser.write(b"".join(frames))
 
 
+# How long after our own Kenwood IF; poll its reply is expected.
+OWN_REPLY_TIMEOUT = 0.5
+own_kenwood_if_until = 0.0  # time.monotonic() deadline; 0 = no own IF reply pending
+
+
+def _should_forward(frame):
+    """Whether a frame from the radio goes to external programs (TCP clients
+    and UART1). Replies to the server's own polls/commands — and on a
+    single-wire CI-V bus, the echo of those — are kept back, so programs only
+    see traffic they asked for (plus the radio's unsolicited reports)."""
+    global own_kenwood_if_until
+    if _is_kenwood():
+        if (
+            own_kenwood_if_until
+            and frame.lstrip().startswith(b"IF")
+            and time.monotonic() < own_kenwood_if_until
+        ):
+            own_kenwood_if_until = 0.0
+            return False
+        return True
+    server_addr = trx_config.get("server_addr")
+    if server_addr == trx_config.get("ctrl_addr"):
+        return True  # same address as the programs: can't tell replies apart
+    start = frame.find(b"\xfe\xfe")
+    if start < 0:
+        return True
+    while start + 2 < len(frame) and frame[start + 2] == 0xFE:
+        start += 1  # skip a longer FE preamble
+    f = frame[start:]
+    if len(f) < 5:
+        return True
+    return server_addr not in (f[2], f[3])  # <to>, <from>
+
+
+def _forward_from_radio(frames, loop_ref):
+    """Send radio frames to TCP clients and relay them to UART1."""
+    frames = [f for f in frames if _should_forward(f)]
+    if not frames:
+        return
+    data = b"".join(frames)
+    if loop_ref:
+        asyncio.run_coroutine_threadsafe(broadcast(data), loop_ref)
+    if ser_uart1 and ser_uart1.is_open:
+        try:
+            ser_uart1.write(data)
+        except Exception as e:
+            print(f"[TRX] UART1 write error: {e}")
+
+
 def serial_reader(loop_ref):
     """Read data from the CAT port: decode for the web UI, broadcast to TCP
     clients, and relay to UART1. On a serial error the port is automatically
     reopened (with retries) so a temporary USB hiccup or transceiver power-off
     does not require a full service restart."""
     global ser, ser_uart1, decoder
+    # Frames are forwarded whole so replies to the server's own requests can
+    # be filtered out (see _should_forward).
+    assembler = CatFrameAssembler()
     while True:
         if ser and ser.is_open:
             try:
@@ -1195,15 +1278,11 @@ def serial_reader(loop_ref):
                     # Decode for web UI
                     if decoder:
                         decoder.feed(data)
-                    # Broadcast to TCP clients
-                    if loop_ref:
-                        asyncio.run_coroutine_threadsafe(broadcast(data), loop_ref)
-                    # Relay to UART1 (local computer)
-                    if ser_uart1 and ser_uart1.is_open:
-                        try:
-                            ser_uart1.write(data)
-                        except Exception as e:
-                            print(f"[TRX] UART1 write error: {e}")
+                    # Forward to TCP clients and UART1 (local computer)
+                    _forward_from_radio(assembler.feed(data), loop_ref)
+                stale = assembler.take_stale()
+                if stale:
+                    _forward_from_radio([stale], loop_ref)
             except Exception as e:
                 print(f"[TRX] Read error: {e}")
                 radio_state["online"] = False
@@ -1261,9 +1340,24 @@ async def broadcast(data):
         clients.discard(w)
 
 
+def _cat_client_allowed(ip):
+    """The CAT TCP port lets a client transmit and retune the radio, so, like
+    the PTT/CW ports, it only accepts the configured client: 127.0.0.1, the IP
+    in client_ip.cfg, and any extra IPs in trx_config["tcp_allowed_ips"]."""
+    if ip == "127.0.0.1":
+        return True
+    if ip and ip == get_ip_from_file(CLIENT_IP_FILE):
+        return True
+    return ip in trx_config.get("tcp_allowed_ips", [])
+
+
 async def tcp_client(reader, writer):
     global external_cat_time
     addr = writer.get_extra_info("peername")
+    if not _cat_client_allowed(addr[0] if addr else None):
+        print(f"[TRX] 🔒 Rejected CAT TCP connection from unauthorized IP: {addr}")
+        writer.close()
+        return
     clients.add(writer)
     assembler = CatFrameAssembler()
     try:
@@ -1294,6 +1388,7 @@ async def tcp_client(reader, writer):
 
 
 async def poller():
+    global own_kenwood_if_until
     poll_cycle = 0
     while True:
         # Run frequently: the faster we sweep stale bytes, the sooner a
@@ -1354,10 +1449,13 @@ async def poller():
             # Kenwood CAT: IF; returns frequency, mode and TX/RX state of the
             # active VFO (A or B)
             cmd = b"IF;"
+            # Kenwood has no addressing: remember that one IF reply is ours so
+            # it isn't forwarded to external programs (see _should_forward).
+            own_kenwood_if_until = time.monotonic() + OWN_REPLY_TIMEOUT
         else:
             # Icom CI-V: poll frequency, plus mode (04) or TX/RX state (1C 00)
             # on alternate cycles — the frequency reply carries neither.
-            head = [0xFE, 0xFE, trx_config["radio_addr"], trx_config["ctrl_addr"]]
+            head = [0xFE, 0xFE, trx_config["radio_addr"], trx_config["server_addr"]]
             extra = [0x04] if poll_cycle % 2 == 0 else [0x1C, 0x00]
             cmd = bytes(head + [0x03, 0xFD] + head + extra + [0xFD])
             poll_cycle += 1
@@ -1531,14 +1629,17 @@ def state():
     )
 
 
-@app.route("/toggle/<int:n>")
+@app.route("/toggle/<int:n>", methods=["POST"])
 def toggle(n):
+    # POST only: a state-changing GET could be triggered from any other page
+    # (e.g. an <img src=".../toggle/3">) while the user is logged in.
     if not auth():
         return jsonify({"error": "no auth"})
     if n < 0 or n > 15:
         return jsonify({"error": "invalid relay index"}), 400
-    toggle_relay(n)
-    apply()
+    with relay_lock:
+        toggle_relay(n)
+        apply()
     return jsonify(
         {"state": get_state(), "names": config["names"], "mode": config["group_mode"]}
     )
@@ -1588,7 +1689,7 @@ def bandrelay_save_rules():
     return "ok"
 
 
-@app.route("/bandrelay/apply")
+@app.route("/bandrelay/apply", methods=["POST"])
 def bandrelay_apply():
     """Manually apply band rules for the current frequency."""
     if not auth():
@@ -1596,11 +1697,12 @@ def bandrelay_apply():
     global band_relay_applied, band_relay_pending
     freq = radio_state.get("freq", 0)
     if freq:
-        relays = set_relays_for_frequency(freq)
-        if relays is None:
-            return jsonify({"relays": [], "freq_khz": freq / 1000, "blocked": True})
-        band_relay_applied = tuple(relays)
-        band_relay_pending = None
+        with relay_lock:
+            relays = set_relays_for_frequency(freq)
+            if relays is None:
+                return jsonify({"relays": [], "freq_khz": freq / 1000, "blocked": True})
+            band_relay_applied = tuple(relays)
+            band_relay_pending = None
         return jsonify({"relays": relays, "freq_khz": freq / 1000})
     return jsonify({"relays": [], "freq_khz": 0})
 
@@ -1650,6 +1752,8 @@ def trx_state():
 @app.route("/trx/ports")
 def trx_ports():
     """Scan for available serial ports (ttyUSB* and ttyACM*) plus UART1."""
+    if not auth():
+        return jsonify([]), 403
     ports = []
     for pattern in ["/dev/ttyUSB*", "/dev/ttyACM*"]:
         for p in glob.glob(pattern):
@@ -1694,11 +1798,24 @@ def trx_config_route():
 
     data = request.json
 
-    # Validate radio_addr if provided
-    if "radio_addr" in data:
-        addr = data["radio_addr"]
-        if not isinstance(addr, int) or addr < 0 or addr > 255:
-            return "Invalid transceiver address: must be 0-255 (0x00-0xFF)", 400
+    # Validate radio_addr / server_addr if provided
+    for key, label in (("radio_addr", "transceiver"), ("server_addr", "server")):
+        if key in data:
+            addr = data[key]
+            if not isinstance(addr, int) or addr < 0 or addr > 255:
+                return f"Invalid {label} address: must be 0-255 (0x00-0xFF)", 400
+    if data.get("server_addr", trx_config.get("server_addr")) == data.get(
+        "radio_addr", trx_config.get("radio_addr")
+    ):
+        return "Server CI-V address must differ from the transceiver address", 400
+
+    if "tcp_allowed_ips" in data:
+        ips = data["tcp_allowed_ips"]
+        if not isinstance(ips, list) or not all(
+            isinstance(ip, str) and is_valid_ip(ip) for ip in ips
+        ):
+            return "Invalid CAT TCP allowed IPs: expected a list of IP addresses", 400
+        data["tcp_allowed_ips"] = [ip.strip() for ip in ips]
 
     old_port = trx_config["serial_port"]
     old_baud = trx_config["baudrate"]
@@ -1726,7 +1843,8 @@ def trx_config_route():
 def _send_civ_cmd(payload: bytes, to_addr=None):
     """Send a CI-V command frame and return True if sent successfully.
     Frame format: FE FE <to_addr> <from_addr> <cmd_data> FD
-    For Xiegu G90: to_addr=radio_addr, from_addr=ctrl_addr
+    from_addr is the server's own address (server_addr), so the radio's OK/NG
+    reply isn't forwarded to external programs.
     If to_addr is None, uses radio_addr from config.
     """
     if not ser or not ser.is_open:
@@ -1734,7 +1852,7 @@ def _send_civ_cmd(payload: bytes, to_addr=None):
     try:
         if to_addr is None:
             to_addr = trx_config["radio_addr"]
-        frame = bytes([0xFE, 0xFE, to_addr, trx_config["ctrl_addr"]]) + payload + bytes([0xFD])
+        frame = bytes([0xFE, 0xFE, to_addr, trx_config["server_addr"]]) + payload + bytes([0xFD])
         with ser_lock:
             ser.write(frame)
         return True
@@ -2279,6 +2397,8 @@ def status_connection():
 @app.route("/ptt/status")
 def ptt_status_api():
     """Return current PTT state (from combined_ptt_service broadcast)."""
+    if not auth():
+        return jsonify({}), 403
     reason = ptt_lock_reason()
     return jsonify({"active": reason is not None, "source": reason})
 
@@ -2397,7 +2517,8 @@ async def main():
             # If serial is not open but the port device exists, try to reconnect
             if (not ser or not ser.is_open) and os.path.exists(port):
                 print(f"[TRX] Auto-reconnect: {port} appeared, reinitializing...")
-                init_serial()
+                with ser_lock:
+                    init_serial()
             # If serial is open but port disappeared, mark offline
             elif ser and ser.is_open and not os.path.exists(port):
                 radio_state["online"] = False

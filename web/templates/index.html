@@ -168,6 +168,12 @@
                 </select>
                 <label>Transceiver Address (hex):</label>
                 <input type="text" id="trx-radio-addr" placeholder="e.g. 0x70" maxlength="6">
+                <label>Server CI-V Address (hex):</label>
+                <input type="text" id="trx-server-addr" placeholder="e.g. 0xE1" maxlength="6">
+                <div style="font-size:12px;color:#7f8c8d;margin-top:2px;">Address the server polls from. Keep it different from the one flrig/JTDX use (usually 0xE0) so replies to the server aren't passed to them</div>
+                <label>Extra CAT TCP clients (IPs, comma-separated):</label>
+                <input type="text" id="trx-tcp-allowed" placeholder="e.g. 192.168.1.50">
+                <div style="font-size:12px;color:#7f8c8d;margin-top:2px;">Port 3001 always accepts the client IP and 127.0.0.1</div>
                 <label>Enabled:</label>
                 <select id="trx-enabled">
                     <option value="true">Yes</option>

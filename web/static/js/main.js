@@ -116,7 +116,7 @@ function toggleRelay(idx) {
         showToast(pttLockMessage(), false);
         return;
     }
-    fetch(`/toggle/${idx}`)
+    fetch(`/toggle/${idx}`, {method: 'POST'})
         .then(r => r.json())
         .then(data => {
             relayState = data.state;
@@ -252,7 +252,19 @@ function populateTrxConfig(cfg, ports) {
     document.getElementById('trx-protocol').value = cfg.protocol;
     document.getElementById('trx-enabled').value = cfg.enabled;
     document.getElementById('trx-uart1-enabled').checked = cfg.uart1_enabled !== false;
-    document.getElementById('trx-radio-addr').value = '0x' + cfg.radio_addr.toString(16).toUpperCase().padStart(2, '0');
+    document.getElementById('trx-radio-addr').value = hexAddr(cfg.radio_addr);
+    document.getElementById('trx-server-addr').value = hexAddr(cfg.server_addr ?? 0xE1);
+    document.getElementById('trx-tcp-allowed').value = (cfg.tcp_allowed_ips || []).join(', ');
+}
+
+function hexAddr(n) {
+    return '0x' + n.toString(16).toUpperCase().padStart(2, '0');
+}
+
+// Parse a "0xNN" CI-V address; returns null if invalid.
+function parseHexAddr(str) {
+    const m = str.trim().match(/^0x([0-9a-fA-F]{1,2})$/);
+    return m ? parseInt(m[1], 16) : null;
 }
 
 function loadTrxConfig() {
@@ -295,6 +307,13 @@ function saveTrxSettings() {
         showToast('❌ Address must be between 0x00 and 0xFF', false);
         return;
     }
+    const serverAddr = parseHexAddr(document.getElementById('trx-server-addr').value);
+    if (serverAddr === null) {
+        showToast('❌ Invalid server CI-V address. Use hex format: 0x00-0xFF', false);
+        return;
+    }
+    const tcpAllowed = document.getElementById('trx-tcp-allowed').value
+        .split(',').map(s => s.trim()).filter(s => s);
 
     // Validate serial port
     const port = document.getElementById('trx-port').value;
@@ -308,6 +327,8 @@ function saveTrxSettings() {
         baudrate: parseInt(document.getElementById('trx-baudrate').value),
         protocol: document.getElementById('trx-protocol').value,
         radio_addr: radioAddr,
+        server_addr: serverAddr,
+        tcp_allowed_ips: tcpAllowed,
         enabled: document.getElementById('trx-enabled').value === 'true',
         uart1_enabled: document.getElementById('trx-uart1-enabled').checked
     };
