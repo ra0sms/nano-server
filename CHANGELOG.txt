@@ -3,6 +3,7 @@
 - PTT: packets with an older sequence number (UDP reordering) are dropped, and the legacy 1-byte duplicates are ignored while extended packets are flowing, so a late '1' can't undo an OFF; a restarted client (sequence back to 1) is accepted after 2 s of silence
 - PTT: the keepalive timeout is checked on every loop pass, so a stream of other packets on port 5001 can no longer postpone the fail-safe
 - PTT state changes are serialized with a lock (PTT is set from the UDP, client-monitor, CW and XML-RPC threads)
+- Ping port 5002 answers a client whose IP is not in client_ip.cfg with "PING_UNAUTHORIZED <its IP>" instead of PING_RESPONSE, so the desktop client can say that its IP is not allowed (and which IP to put there) instead of showing ONLINE while PTT/CAT are ignored; older clients show such a server as offline
 
 
 ## v1.2.3 (2026-09-26)

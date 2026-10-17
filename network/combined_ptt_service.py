@@ -460,7 +460,13 @@ def client_monitor():
 
 
 def ping_responder():
-    """Reply PING_RESPONSE to any PING_REQUEST — lets the client measure RTT.
+    """Reply PING_RESPONSE to PING_REQUEST — lets the client measure RTT.
+
+    A request from any other IP than the authorized client gets
+    "PING_UNAUTHORIZED <sender ip>" instead: the server is reachable, but its
+    PTT/CW/CAT ports ignore that client, and the client can show which address
+    to put into client_ip.cfg (useful behind VPN/NAT). Older clients don't know
+    this reply and simply show the server as offline.
 
     Also doubles as the primary "client is connected" signal. The client's
     ServerMonitor sends a PING_REQUEST to this port every second while the app is
@@ -478,10 +484,12 @@ def ping_responder():
             data, addr = sock.recvfrom(1024)
             sender_ip, _ = addr
             if data == b"PING_REQUEST":
-                sock.sendto(b"PING_RESPONSE", addr)
                 if sender_ip == client_ip:
+                    sock.sendto(b"PING_RESPONSE", addr)
                     # Client app heartbeat (ServerMonitor) — proves it's connected.
                     client_last_seen = time.monotonic()
+                else:
+                    sock.sendto(b"PING_UNAUTHORIZED " + sender_ip.encode(), addr)
         except socket.timeout:
             continue
         except Exception as e:
