@@ -61,9 +61,7 @@ PTT_PORT = 5001       # PTT commands
 PING_PORT = 5002      # Ping / RTT
 WK_PORT = 5003        # Winkeyer CW Keyer
 XMLRPC_PORT = 6789    # XML-RPC (PyWinKeyerSerial compatible, default in not1mm)
-TIMEOUT = 1.0
 CHECK_INTERVAL = 0.3
-MAGIC_PHRASE = b"PING_RESPONSE"
 
 # === PTT Keepalive ===
 PTT_KEEPALIVE_TIMEOUT = 0.5   # 500 ms — force PTT off if no packet received
@@ -404,23 +402,6 @@ def ptt_server():
 
 
 # ================= PING / CLIENT MONITOR =================
-
-
-def send_ping(ip):
-    """Send ping request and wait for magic reply"""
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(TIMEOUT)
-        sock.sendto(b"PING_REQUEST", (ip, PING_PORT))
-        data, addr = sock.recvfrom(1024)
-        ok = data == MAGIC_PHRASE and addr[0] == ip
-        sock.close()
-        return ok
-    except socket.timeout:
-        return False
-    except Exception as e:
-        print(f"⚠️ Ping error to {ip}: {e}")
-        return False
 
 
 def client_monitor():
