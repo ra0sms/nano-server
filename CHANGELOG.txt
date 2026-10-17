@@ -1,3 +1,10 @@
+## Unreleased
+- PTT: a keepalive arriving after the client's OFF no longer keys the transmitter again (it used to transmit for up to 0.5 s until the keepalive timeout); after a keepalive timeout without an OFF, keepalives still resume PTT
+- PTT: packets with an older sequence number (UDP reordering) are dropped, and the legacy 1-byte duplicates are ignored while extended packets are flowing, so a late '1' can't undo an OFF; a restarted client (sequence back to 1) is accepted after 2 s of silence
+- PTT: the keepalive timeout is checked on every loop pass, so a stream of other packets on port 5001 can no longer postpone the fail-safe
+- PTT state changes are serialized with a lock (PTT is set from the UDP, client-monitor, CW and XML-RPC threads)
+
+
 ## v1.2.3 (2026-09-26)
 - Frequency changes from the web UI (step, band buttons, /trx/set_freq) are refused while PTT is active or its state is unknown: band relays can't follow during TX, so the radio would transmit into the previous band's antenna. Frequency steps are also refused while the transceiver is offline instead of jumping to 7.1 MHz
 - When the client disappears, ptt_server now also stops a running CW message, clears the CW buffer and releases the key line (with break-in the radio would otherwise keep transmitting); a stopped CW message no longer finishes the current character and re-keys the transmitter

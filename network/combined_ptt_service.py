@@ -68,6 +68,12 @@ MAGIC_PHRASE = b"PING_RESPONSE"
 # === PTT Keepalive ===
 PTT_KEEPALIVE_TIMEOUT = 0.5   # 500 ms — force PTT off if no packet received
 PTT_KEEPALIVE_CHECK_INTERVAL = 0.1  # 100 ms — check loop granularity
+# While extended packets keep arriving within this window, packets with an
+# older sequence number (UDP reordering) are dropped, and legacy 1-byte packets
+# (sent by the client as duplicates of the extended ones) are ignored. After a
+# longer silence any sequence number is accepted — a restarted client starts
+# again from 1.
+PTT_SEQ_WINDOW = 2.0
 
 # === Tune-mode watchdog ===
 # The Winkeyer 0x1C command and the XML-RPC tuneon() call hold PTT/key down
@@ -106,6 +112,9 @@ ptt_keepalive_last = 0.0       # timestamp of last received PTT packet (monotoni
 ptt_keepalive_active = False   # True when we've received a "1" with keepalive flag
 ptt_last_seq = 0               # last seen sequence number (for gap detection)
 ptt_seq_gap_detected = False   # set True when a seq gap is found
+ptt_ext_last = 0.0             # timestamp of last accepted extended packet (monotonic)
+ptt_released = True            # explicit OFF received; a keepalive must not re-key
+ptt_lock = threading.RLock()   # guards ptt_state and the keepalive tracking above
 
 # Tune-mode watchdog tracking: monotonic timestamp of when Winkeyer 0x1C /
 # rpc_tuneon() last engaged PTT, or None when not in tune mode. Cleared
@@ -221,17 +230,18 @@ def set_ptt(value: int):
     global ptt_state, tune_hold_start
     if value not in (0, 1):
         return
-    if value == 0:
-        tune_hold_start = None
-    if value != ptt_state:
-        try:
-            gpio.set_value(LINE_PTT, value)
-            ptt_state = value
-            print(f"📡 PTT {'ON' if value else 'OFF'} (GPIO={value})")
-        except Exception as e:
-            print(f"⚠️ GPIO error: {e}")
-    # Always broadcast status, even if state didn't change (for sync on startup)
-    broadcast_ptt_status(value)
+    with ptt_lock:
+        if value == 0:
+            tune_hold_start = None
+        if value != ptt_state:
+            try:
+                gpio.set_value(LINE_PTT, value)
+                ptt_state = value
+                print(f"📡 PTT {'ON' if value else 'OFF'} (GPIO={value})")
+            except Exception as e:
+                print(f"⚠️ GPIO error: {e}")
+        # Always broadcast status, even if state didn't change (for sync on startup)
+        broadcast_ptt_status(value)
 
 
 def parse_ptt_packet(data: bytes):
@@ -277,6 +287,71 @@ def parse_ptt_packet(data: bytes):
             return None, None, False
 
 
+def handle_ptt_packet(ptt_value: int, seq, is_keepalive: bool, sender_ip: str):
+    """Apply one parsed PTT packet from the authorized client."""
+    global ptt_keepalive_last, ptt_keepalive_active, ptt_last_seq, ptt_seq_gap_detected
+    global ptt_ext_last, ptt_released
+
+    now = time.monotonic()
+    with ptt_lock:
+        ext_flowing = now - ptt_ext_last < PTT_SEQ_WINDOW
+
+        if seq is None:
+            # Legacy 1-byte packet. Current clients send one next to every
+            # extended ON/OFF; once extended packets flow it is a duplicate,
+            # and a late one (e.g. '1' after the extended OFF) would re-key.
+            if ext_flowing:
+                return
+        else:
+            if ext_flowing:
+                delta = (seq - ptt_last_seq) & 0xFFFFFFFF
+                if delta == 0 or delta >= 0x80000000:
+                    print(f"⚠️ Dropped stale PTT packet seq {seq} (last {ptt_last_seq})")
+                    return
+                # --- Sequence number gap detection ---
+                if ptt_keepalive_active and delta > 1:
+                    print(f"⚠️ PTT packet loss detected: seq jumped {ptt_last_seq} -> {seq} (lost {delta-1} pkt(s))")
+                    ptt_seq_gap_detected = True
+            ptt_last_seq = seq
+            ptt_ext_last = now
+
+        # --- Process command ---
+        if ptt_value == 1:
+            if is_keepalive and ptt_released:
+                # A keepalive that raced the client's OFF (older clients could
+                # send one right after it): never re-key on it. After a keepalive
+                # timeout (no OFF received) keepalives still resume PTT.
+                return
+            if not ptt_keepalive_active or not is_keepalive:
+                # First press or old-protocol press
+                set_ptt(1)
+            ptt_released = False
+            # Update keepalive timestamp on every '1' packet
+            ptt_keepalive_last = now
+            ptt_keepalive_active = True
+        else:  # ptt_value == 0
+            if is_keepalive:
+                # Keepalive with '0' shouldn't happen, but handle gracefully
+                print(f"⚠️ Received keepalive with PTT=0 from {sender_ip}")
+            set_ptt(0)
+            ptt_released = True
+            ptt_keepalive_active = False
+            ptt_seq_gap_detected = False
+
+
+def check_ptt_keepalive_timeout():
+    """Force PTT off when keepalive packets stopped arriving."""
+    global ptt_keepalive_active, ptt_seq_gap_detected
+    with ptt_lock:
+        if ptt_keepalive_active:
+            elapsed = time.monotonic() - ptt_keepalive_last
+            if elapsed > PTT_KEEPALIVE_TIMEOUT:
+                print(f"⏰ PTT keepalive timeout ({elapsed*1000:.0f} ms) — forcing PTT OFF")
+                set_ptt(0)
+                ptt_keepalive_active = False
+                ptt_seq_gap_detected = False
+
+
 def ptt_server():
     """
     UDP server listening for PTT commands on port 5001.
@@ -285,7 +360,7 @@ def ptt_server():
     If keepalive packets stop arriving for >PTT_KEEPALIVE_TIMEOUT, PTT is
     forced off as a fail-safe.
     """
-    global ptt_keepalive_last, ptt_keepalive_active, ptt_last_seq, ptt_seq_gap_detected, client_last_seen
+    global client_last_seen
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((SERVER_IP, PTT_PORT))
@@ -295,6 +370,10 @@ def ptt_server():
 
     try:
         while not shutdown_flag.is_set():
+            # Checked on every pass, not only on a recv timeout: a steady
+            # stream of other packets (e.g. from unauthorized IPs) must not
+            # postpone the fail-safe.
+            check_ptt_keepalive_timeout()
             try:
                 data, addr = sock.recvfrom(1024)
                 sender_ip, _ = addr
@@ -313,41 +392,9 @@ def ptt_server():
                     continue
 
                 ptt_value, seq, is_keepalive = result
-
-                # --- Sequence number gap detection (new protocol only) ---
-                if seq is not None:
-                    if ptt_keepalive_active and seq != ptt_last_seq + 1:
-                        gap = seq - ptt_last_seq
-                        if gap > 1:
-                            print(f"⚠️ PTT packet loss detected: seq jumped {ptt_last_seq} -> {seq} (lost {gap-1} pkt(s))")
-                            ptt_seq_gap_detected = True
-                    ptt_last_seq = seq
-
-                # --- Process command ---
-                if ptt_value == 1:
-                    if not ptt_keepalive_active or not is_keepalive:
-                        # First press or old-protocol press
-                        set_ptt(1)
-                    # Update keepalive timestamp on every '1' packet
-                    ptt_keepalive_last = time.monotonic()
-                    ptt_keepalive_active = True
-                else:  # ptt_value == 0
-                    if is_keepalive:
-                        # Keepalive with '0' shouldn't happen, but handle gracefully
-                        print(f"⚠️ Received keepalive with PTT=0 from {sender_ip}")
-                    set_ptt(0)
-                    ptt_keepalive_active = False
-                    ptt_seq_gap_detected = False
+                handle_ptt_packet(ptt_value, seq, is_keepalive, sender_ip)
 
             except socket.timeout:
-                # --- Keepalive timeout check ---
-                if ptt_keepalive_active:
-                    elapsed = time.monotonic() - ptt_keepalive_last
-                    if elapsed > PTT_KEEPALIVE_TIMEOUT:
-                        print(f"⏰ PTT keepalive timeout ({elapsed*1000:.0f} ms) — forcing PTT OFF")
-                        set_ptt(0)
-                        ptt_keepalive_active = False
-                        ptt_seq_gap_detected = False
                 continue
             except Exception as e:
                 if not shutdown_flag.is_set():
