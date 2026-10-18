@@ -46,3 +46,6 @@ privatekey
 publickey
 
 
+
+# KiCad automatic backups (the project itself is in git)
+*-backups/
