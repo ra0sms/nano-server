@@ -1,4 +1,4 @@
-## Unreleased
+## v1.2.4 (2026-10-18)
 - Security: mjpg-streamer listens on 127.0.0.1 only. It used to serve the camera on port 8081 to anyone who could reach the server, without the web panel's password; the panel's Camera view (/stream) is unchanged
 - Update applies the newest release tag (git merge --ff-only <tag>) instead of pulling the tip of main, which could install unreleased commits; a checkout already ahead of the tag is left as is
 - "Restart Audio Services" and Update now install changed systemd unit files (for units already installed) and reload systemd, so unit changes like the camera one reach existing installs
