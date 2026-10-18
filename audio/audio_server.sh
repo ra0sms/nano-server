@@ -12,6 +12,10 @@ if [[ -z "$IP_ADDRESS" ]]; then
   echo "IP address was not found: $IP_FILE"
   exit 1
 fi
+if [[ ! "$IP_ADDRESS" =~ ^[0-9A-Fa-f:.]+$ ]]; then
+  echo "Invalid IP address in $IP_FILE: $IP_ADDRESS"
+  exit 1
+fi
 
 # Путь к файлу конфигурации аудио
 CONFIG_FILE="/home/pi/nano-server/audio/audio_config.cfg"
@@ -37,6 +41,10 @@ else
     RATE=$DEFAULT_RATE
     BUFFER_TIME=$DEFAULT_BUFFER_TIME
 fi
+
+# These end up on the gst-launch command line: accept plain numbers only
+[[ "$RATE" =~ ^[0-9]+$ ]] || RATE=$DEFAULT_RATE
+[[ "$BUFFER_TIME" =~ ^[0-9]+$ ]] || BUFFER_TIME=$DEFAULT_BUFFER_TIME
 
 echo "Starting Audio SERVER:"
 echo "  Target IP: $IP_ADDRESS"

@@ -844,7 +844,37 @@ def read_audio_config():
         return defaults
 
 
+# audio_server.sh (run as root) puts these into the gst-launch command line,
+# so only plain integers in a sane range may ever be written.
+AUDIO_RATES = (8000, 12000, 16000, 24000, 48000)   # sample rates Opus supports
+AUDIO_BUFFER_RANGE = (10000, 1000000)               # alsasrc buffer-time, µs
+
+
+def _as_int(value, lo, hi):
+    """value as an int within [lo, hi], or None (rejects bools, fractions, text)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if not isinstance(value, int) or not lo <= value <= hi:
+        return None
+    return value
+
+
+def valid_audio_config(rate, buffer_time):
+    """(rate, buffer_time) as ints, or None if either is not allowed."""
+    rate = _as_int(rate, min(AUDIO_RATES), max(AUDIO_RATES))
+    buffer_time = _as_int(buffer_time, *AUDIO_BUFFER_RANGE)
+    if rate not in AUDIO_RATES or buffer_time is None:
+        return None
+    return rate, buffer_time
+
+
 def write_audio_config(rate, buffer_time):
+    checked = valid_audio_config(rate, buffer_time)
+    if checked is None:
+        raise ValueError(f"invalid audio config: rate={rate!r} buffer={buffer_time!r}")
+    rate, buffer_time = checked
     content = f"RATE={rate}\nLATENCY={buffer_time}\n"
     write_config_file(AUDIO_CONFIG_FILE, content)
 
@@ -914,6 +944,13 @@ def load_profile(name):
                         rate = int(line.split("=")[1].strip())
                     if line.startswith("Latency="):
                         buffer_time = int(line.split("=")[1].strip())
+        # Validate everything before writing anything, so a bad profile
+        # can't be half-applied (the IPs go into root's audio pipelines too).
+        for label, ip in (("server", server_ip), ("client", client_ip)):
+            if not is_valid_ip(ip):
+                return False, f"Invalid {label} IP in profile: '{ip}'"
+        if valid_audio_config(rate, buffer_time) is None:
+            return False, f"Invalid audio settings in profile: rate={rate}, latency={buffer_time}"
         write_config_file(SERVER_IP_FILE, server_ip)
         write_config_file(CLIENT_IP_FILE, client_ip)
         write_audio_config(rate, buffer_time)
@@ -2198,8 +2235,10 @@ def alsa_save_state():
 def audio_set_speaker():
     if not auth():
         return "no auth", 403
-    data = request.json
-    vol = data.get("volume", 50)
+    data = request.get_json(silent=True) or {}
+    vol = _as_int(data.get("volume", 50), 0, 100)
+    if vol is None:
+        return "volume must be an integer 0-100", 400
     subprocess.run(["amixer", "-c", ALSA_CARD, "set", SPEAKER, f"{vol}%"], timeout=5)
     alsa_save_state()
     return "ok"
@@ -2209,8 +2248,10 @@ def audio_set_speaker():
 def audio_set_mic():
     if not auth():
         return "no auth", 403
-    data = request.json
-    vol = data.get("volume", 50)
+    data = request.get_json(silent=True) or {}
+    vol = _as_int(data.get("volume", 50), 0, 100)
+    if vol is None:
+        return "volume must be an integer 0-100", 400
     alsa_value = percent_to_alsa(vol)
     subprocess.run(["amixer", "-c", ALSA_CARD, "cset", MIC, str(alsa_value)], timeout=5)
     alsa_save_state()
@@ -2265,10 +2306,15 @@ def config_set_client_ip():
 def config_set_audio():
     if not auth():
         return "no auth", 403
-    data = request.json
-    rate = data.get("rate", 48000)
-    buffer_time = data.get("buffer", 100000)
-    write_audio_config(rate, buffer_time)
+    data = request.get_json(silent=True) or {}
+    checked = valid_audio_config(data.get("rate", 48000), data.get("buffer", 100000))
+    if checked is None:
+        return (
+            f"Invalid audio settings: rate must be one of {', '.join(map(str, AUDIO_RATES))} Hz, "
+            f"buffer {AUDIO_BUFFER_RANGE[0]}-{AUDIO_BUFFER_RANGE[1]} µs",
+            400,
+        )
+    write_audio_config(*checked)
     return "ok"
 
 
@@ -2485,9 +2531,19 @@ def update_apply():
                 "message": "Repository has local changes, refusing to update: " + ", ".join(unexpected),
             }), 409
 
-        pull = _run_git(["pull", "--ff-only"], timeout=60)
-        if pull.returncode != 0:
-            return jsonify({"success": False, "message": pull.stderr.strip() or "git pull failed"}), 500
+        # Move to the newest release tag, not to the tip of the branch: the
+        # update check compares tags, and main may already hold unreleased
+        # commits. A tag that is already contained in HEAD is a no-op (never
+        # a downgrade); a diverged checkout is refused.
+        latest_tag = get_latest_tag()
+        if not latest_tag:
+            return jsonify({"success": False, "message": "No release tag found on origin"}), 500
+        merge = _run_git(["merge", "--ff-only", latest_tag], timeout=60)
+        if merge.returncode != 0:
+            return jsonify({
+                "success": False,
+                "message": merge.stderr.strip() or f"Could not fast-forward to {latest_tag}",
+            }), 500
     except subprocess.SubprocessError as e:
         return jsonify({"success": False, "message": str(e)}), 500
     finally:

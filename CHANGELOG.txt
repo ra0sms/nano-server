@@ -1,4 +1,8 @@
 ## Unreleased
+- Security: mjpg-streamer listens on 127.0.0.1 only. It used to serve the camera on port 8081 to anyone who could reach the server, without the web panel's password; the panel's Camera view (/stream) is unchanged
+- Update applies the newest release tag (git merge --ff-only <tag>) instead of pulling the tip of main, which could install unreleased commits; a checkout already ahead of the tag is left as is
+- "Restart Audio Services" and Update now install changed systemd unit files (for units already installed) and reload systemd, so unit changes like the camera one reach existing installs
+- Audio settings are validated: sample rate must be one Opus supports (8/12/16/24/48 kHz), buffer 10-1000 ms, volumes 0-100; they used to be written unchecked and audio_server.sh (root) put them unquoted on the gst-launch command line. A profile is validated as a whole before any of it is applied, and audio_server.sh itself ignores non-numeric values and refuses a malformed client IP
 - PTT: a keepalive arriving after the client's OFF no longer keys the transmitter again (it used to transmit for up to 0.5 s until the keepalive timeout); after a keepalive timeout without an OFF, keepalives still resume PTT
 - PTT: packets with an older sequence number (UDP reordering) are dropped, and the legacy 1-byte duplicates are ignored while extended packets are flowing, so a late '1' can't undo an OFF; a restarted client (sequence back to 1) is accepted after 2 s of silence
 - PTT: the keepalive timeout is checked on every loop pass, so a stream of other packets on port 5001 can no longer postpone the fail-safe

@@ -54,7 +54,6 @@ Client PC                          NanoPi NEO (Server)
                     UDP :5003  ──→  CW Keyer (Winkeyer protocol, UDP)
                     TCP :5050  ←──  Web UI (Flask): relays, TRX, band relay, audio, config, settings, update (live status over SSE)
                     TCP :6789  ←──  CW XML-RPC (PyWinKeyerSerial / not1mm)
-                    TCP :8081  ←──  MJPEG video stream
                     TCP :3001  ←──  CAT (Icom CI-V or Kenwood)
 
 Local PC (UART1)                   NanoPi NEO (Server)
@@ -70,7 +69,7 @@ Local PC (UART1)                   NanoPi NEO (Server)
 | `audio_server` | GStreamer audio TX (server mic → client) |
 | `audio_client_on_server` | GStreamer audio RX (client → server speaker) |
 | `relay-web` | Web UI: relays, TRX, band relay, audio, config, settings, update (port 5050) |
-| `mjpeg-streamer` | MJPEG video stream from USB camera |
+| `mjpeg-streamer` | MJPEG video stream from USB camera (localhost:8081 only; viewed through the web panel login) |
 | `alsa_restore` | Restores ALSA mixer state at boot |
 
 ---
