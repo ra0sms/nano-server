@@ -1237,10 +1237,20 @@ def init_serial():
         if ser_uart1 and ser_uart1.is_open:
             ser_uart1.close()
 
-        ser = serial.Serial(
-            trx_config["serial_port"], trx_config["baudrate"], timeout=0.1
-        )
         protocol = trx_config.get("protocol", "Icom")
+        ser = serial.Serial()
+        ser.port = trx_config["serial_port"]
+        ser.baudrate = trx_config["baudrate"]
+        ser.timeout = 0.1
+        if protocol == "Kenwood":
+            # pyserial raises RTS and DTR by default. Kenwood-protocol radios
+            # (Elecraft K3, Kenwood, Yaesu) can map these lines to PTT/CW key
+            # (K3: CONFIG:PTT-KEY), and with them held high the K3 stops
+            # answering CAT. The server never uses them, so keep them low.
+            # Icom keeps the default: some CI-V interfaces draw power from them.
+            ser.rts = False
+            ser.dtr = False
+        ser.open()
         if protocol == "Kenwood":
             decoder = KenwoodDecoder()
         else:
