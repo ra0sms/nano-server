@@ -1,4 +1,4 @@
-## Unreleased
+## v1.2.5 (2026-10-23)
 - New CAT protocol "Elecraft" in TRX Settings: the Kenwood protocol with the CAT port opened with RTS and DTR low. With them high (pyserial's default) an Elecraft K3 stopped answering CAT, so the web UI showed no frequency. "Kenwood" keeps them high again: f34eb3d had made them low for it, which silences a TS-590 (it uses RTS for flow control)
 
 
