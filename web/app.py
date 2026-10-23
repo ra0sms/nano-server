@@ -1242,16 +1242,17 @@ def init_serial():
         ser.port = trx_config["serial_port"]
         ser.baudrate = trx_config["baudrate"]
         ser.timeout = 0.1
-        if protocol == "Kenwood":
-            # pyserial raises RTS and DTR by default. Kenwood-protocol radios
-            # (Elecraft K3, Kenwood, Yaesu) can map these lines to PTT/CW key
-            # (K3: CONFIG:PTT-KEY), and with them held high the K3 stops
-            # answering CAT. The server never uses them, so keep them low.
-            # Icom keeps the default: some CI-V interfaces draw power from them.
+        # pyserial raises RTS and DTR by default, which Kenwood (the TS-590
+        # uses RTS for flow control and stays silent with it low) and CI-V
+        # interfaces powered from these lines rely on. An Elecraft K3 maps
+        # them to PTT/CW key (CONFIG:PTT-KEY) and stops answering CAT with
+        # them high; the server never uses them, so for Elecraft keep them
+        # low. Set before open() so they don't sit high while the port opens.
+        if protocol == "Elecraft":
             ser.rts = False
             ser.dtr = False
         ser.open()
-        if protocol == "Kenwood":
+        if _is_kenwood():
             decoder = KenwoodDecoder()
         else:
             decoder = CIVDecoder()
@@ -1617,8 +1618,7 @@ async def poller():
         ):
             continue
 
-        protocol = trx_config.get("protocol", "Icom")
-        if protocol == "Kenwood":
+        if _is_kenwood():
             # Kenwood CAT: IF; returns frequency, mode and TX/RX state of the
             # active VFO (A or B)
             cmd = b"IF;"
@@ -2039,7 +2039,9 @@ def _send_kenwood_cmd(cmd: str):
 
 
 def _is_kenwood():
-    return trx_config.get("protocol", "Icom") == "Kenwood"
+    # Elecraft speaks the Kenwood CAT protocol; it differs only in the
+    # RTS/DTR levels the port is opened with (see init_serial).
+    return trx_config.get("protocol", "Icom") in ("Kenwood", "Elecraft")
 
 
 def _freq_to_civ_bcd(freq_hz):

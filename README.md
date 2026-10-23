@@ -15,7 +15,7 @@ Desktop client software: https://github.com/ra0sms/caesar-client-desktop
 - 📷 **Video streaming** via mjpg-streamer (MJPEG over HTTP)
 - 🔌 **Relay control** via I2C (2×PCF8574T, 16 relays total)
 - 🌐 **Web interface** — relays, TRX, band relay rules, audio, config, settings, self-update (single UI on port 5050)
-- 🔗 **CAT interface** forwarding over TCP (Icom CI-V and Kenwood protocols)
+- 🔗 **CAT interface** forwarding over TCP (Icom CI-V, Kenwood and Elecraft protocols; Elecraft is the Kenwood protocol with RTS/DTR held low, as the K3 needs)
 - 🔄 **UART1 transparent relay** — CAT data duplicated to physical UART1 port for local computer access
 - 🔒 **Fail-safe** — PTT is forced OFF when client disconnects; a CW message in progress is stopped and the CW key line released too (with break-in the radio would otherwise keep transmitting on the key alone)
 - 🚫 **PTT Lock** — relay switching (manual and band relay) is blocked while PTT is active to prevent accidental antenna switching during transmission
